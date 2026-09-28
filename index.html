@@ -116,7 +116,7 @@
         padding: 4px 6px;
       }
 
-      #preview-stage {
+      .preview-stage {
         position: relative;
         width: 100%;
         margin-top: 10px;
@@ -140,13 +140,119 @@
         cursor: move;
       }
 
-      #preview-stage.is-dragging .preview-layer {
+      .preview-stage.is-dragging .preview-layer {
         cursor: grabbing;
       }
 
-      .preview-layer.is-active {
-        outline: 2px dashed #0d66d0;
-        outline-offset: -1px;
+      .preview-selection {
+        position: absolute;
+        display: none;
+        box-sizing: border-box;
+        border: 2px dashed #0d66d0;
+        pointer-events: none;
+      }
+
+      .preview-handle {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        box-sizing: border-box;
+        background: white;
+        border: 1px solid #0d66d0;
+        pointer-events: auto;
+      }
+
+      .preview-handle.is-nw {
+        left: -6px;
+        top: -6px;
+        cursor: nwse-resize;
+      }
+
+      .preview-handle.is-ne {
+        right: -6px;
+        top: -6px;
+        cursor: nesw-resize;
+      }
+
+      .preview-handle.is-sw {
+        left: -6px;
+        bottom: -6px;
+        cursor: nesw-resize;
+      }
+
+      .preview-handle.is-se {
+        right: -6px;
+        bottom: -6px;
+        cursor: nwse-resize;
+      }
+
+      .tab-bar {
+        display: flex;
+        flex-direction: row;
+        width: 100%;
+        margin-bottom: 8px;
+        border-bottom: 1px solid #0d66d0;
+      }
+
+      .tab-btn {
+        flex: 1;
+        padding: 6px 0;
+        font-size: 13px;
+        color: #aaa;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+      }
+
+      .tab-btn.is-active {
+        color: white;
+        border-bottom-color: #0d66d0;
+      }
+
+      .module-row {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        margin-bottom: 8px;
+      }
+
+      .module-row sp-picker {
+        flex: 1 1 100px;
+        min-width: 80px;
+      }
+
+      .module-row .text-input {
+        flex: 1 1 120px;
+        min-width: 80px;
+      }
+
+      .text-input {
+        box-sizing: border-box;
+        color: black;
+        background: white;
+        border: 2px solid #666;
+        border-radius: 3px;
+        padding: 3px 6px;
+        font-size: 12px;
+      }
+
+      .text-input.is-invalid {
+        border-color: #e34850;
+      }
+
+      .small-btn {
+        flex: 0 0 auto;
+        font-size: 11px;
+        padding: 3px 8px;
+        color: white;
+        background: #444;
+        border: 1px solid #666;
+        border-radius: 3px;
+        cursor: pointer;
       }
 
       .preview-bar {
@@ -214,122 +320,246 @@
 
   <body>
     <div class="field">
-      <p class="hint">母版需含 $BG $PROD $HEAD $LOGO $SM $CTA；另存 3 個 PSD</p>
+      <p class="hint">母版需含 $BG $PROD $HEAD $LOGO $SM $CTA；依模組版型另存 PSD</p>
       <sp-button id="btn-resize-1200x629" variant="cta">開始執行</sp-button>
 
       <div id="resize-settings-panel" style="display: none; width: 100%">
-        <p class="hint">
-          先選版本與圖層,調整下方比例後按「儲存」,再按「產出Resize圖」
-        </p>
+        <div class="preview-bar" style="margin: 0 0 6px">
+          <span id="module-folder-label" class="hint"></span>
+          <button type="button" id="btn-change-module-folder">變更資料夾</button>
+        </div>
 
-        <div class="settings-row">
-          <div class="picker-col">
-            <span class="picker-title">選擇Resize樣板</span>
-            <sp-picker id="setting-variant" size="m">
+        <div class="tab-bar">
+          <button type="button" class="tab-btn is-active" data-tab="resize">
+            Resize
+          </button>
+          <button type="button" class="tab-btn" data-tab="apply">套圖</button>
+        </div>
+
+        <!-- ===== Resize 分頁 ===== -->
+        <div data-workspace="resize">
+          <div class="module-row">
+            <sp-picker data-role="template-picker" size="m" label="PSD 模組">
               <sp-menu slot="options"></sp-menu>
             </sp-picker>
+            <button type="button" class="small-btn" data-role="btn-upload-psd">
+              上傳.psd
+            </button>
+            <input
+              type="text"
+              class="text-input"
+              data-role="template-name"
+              placeholder="模組名稱"
+            />
+            <button type="button" class="small-btn" data-role="btn-add-template">
+              新增
+            </button>
           </div>
-          <div class="picker-col">
-            <span class="picker-title">圖層</span>
-            <sp-picker id="setting-element" size="m">
+
+          <div class="module-row">
+            <input
+              type="text"
+              class="text-input"
+              data-role="variant-name"
+              placeholder="版型名稱（例：上圖下字）"
+            />
+            <button type="button" class="small-btn" data-role="btn-add-variant">
+              新增
+            </button>
+          </div>
+
+          <div class="settings-row">
+            <div class="picker-col">
+              <span class="picker-title">選擇Resize樣板</span>
+              <sp-picker data-role="variant-picker" size="m">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
+            </div>
+            <div class="picker-col">
+              <span class="picker-title">圖層</span>
+              <sp-picker data-role="element-picker" size="m">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
+            </div>
+          </div>
+
+          <div class="preview-stage" data-role="preview-stage"></div>
+          <div class="preview-bar">
+            <span data-role="preview-status" class="hint"></span>
+            <button type="button" data-role="btn-reset-defaults">還原預設值</button>
+            <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
+          </div>
+
+          <dialog data-role="reset-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text" data-role="reset-dialog-text">
+                確認要還原預設值嗎？
+              </p>
+              <div class="settings-row">
+                <sp-button data-role="btn-reset-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-reset-confirm" variant="cta"
+                  >確認</sp-button
+                >
+              </div>
+            </div>
+          </dialog>
+
+          <div class="settings-fields" style="margin-top: 10px">
+            <div class="settings-field-row">
+              <label>靠左%</label>
+              <input type="number" data-role="field-leftPercent" step="0.1" />
+              <div class="stepper">
+                <button type="button" data-step-target="leftPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="leftPercent" data-step-dir="down">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>靠上%</label>
+              <input type="number" data-role="field-topPercent" step="0.1" />
+              <div class="stepper">
+                <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
+                <button type="button" data-step-target="topPercent" data-step-dir="down">▲</button>
+                <button type="button" data-step-target="topPercent" data-step-dir="up">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>寬度%</label>
+              <input type="number" data-role="field-widthPercent" step="0.1" />
+              <div class="stepper">
+                <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-actions" style="margin-top: 10px">
+            <sp-button data-role="btn-save-setting" variant="secondary">儲存</sp-button>
+          </div>
+
+          <div class="divider"></div>
+          <div class="settings-row">
+            <sp-button data-role="btn-start-generate" variant="cta"
+              >產出Resize圖</sp-button
+            >
+            <sp-button data-role="btn-cancel-settings" variant="secondary"
+              >取消</sp-button
+            >
+          </div>
+        </div>
+
+        <!-- ===== 套圖（目前與 Resize 相同，之後再調整） 分頁 ===== -->
+        <div data-workspace="apply" style="display: none">
+          <div class="module-row">
+            <sp-picker data-role="template-picker" size="m" label="PSD 模組">
               <sp-menu slot="options"></sp-menu>
             </sp-picker>
+            <button type="button" class="small-btn" data-role="btn-upload-psd">
+              上傳.psd
+            </button>
+            <input
+              type="text"
+              class="text-input"
+              data-role="template-name"
+              placeholder="模組名稱"
+            />
+            <button type="button" class="small-btn" data-role="btn-add-template">
+              新增
+            </button>
           </div>
-        </div>
 
-        <div id="preview-stage"></div>
-        <div class="preview-bar">
-          <span id="preview-status" class="hint"></span>
-          <button type="button" id="btn-reset-defaults">還原預設值</button>
-          <button type="button" id="btn-refresh-preview">重新擷取圖層</button>
-        </div>
+          <div class="module-row">
+            <input
+              type="text"
+              class="text-input"
+              data-role="variant-name"
+              placeholder="版型名稱（例：上圖下字）"
+            />
+            <button type="button" class="small-btn" data-role="btn-add-variant">
+              新增
+            </button>
+          </div>
 
-        <dialog id="reset-dialog">
-          <div class="dialog-body">
-            <p class="dialog-text">確認要還原預設值嗎？</p>
-            <div class="settings-row">
-              <sp-button id="btn-reset-cancel" variant="secondary">取消</sp-button>
-              <sp-button id="btn-reset-confirm" variant="cta">確認</sp-button>
+          <div class="settings-row">
+            <div class="picker-col">
+              <span class="picker-title">選擇Resize樣板</span>
+              <sp-picker data-role="variant-picker" size="m">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
+            </div>
+            <div class="picker-col">
+              <span class="picker-title">圖層</span>
+              <sp-picker data-role="element-picker" size="m">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
             </div>
           </div>
-        </dialog>
 
-        <div class="settings-fields" style="margin-top: 10px">
-          <div class="settings-field-row">
-            <label for="setting-leftPercent">靠左%</label>
-            <input type="number" id="setting-leftPercent" step="0.1" />
-            <div class="stepper">
-              <button
-                type="button"
-                data-step-target="setting-leftPercent"
-                data-step-dir="up"
-              >
-                ▲
-              </button>
-              <button
-                type="button"
-                data-step-target="setting-leftPercent"
-                data-step-dir="down"
-              >
-                ▼
-              </button>
+          <div class="preview-stage" data-role="preview-stage"></div>
+          <div class="preview-bar">
+            <span data-role="preview-status" class="hint"></span>
+            <button type="button" data-role="btn-reset-defaults">還原預設值</button>
+            <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
+          </div>
+
+          <dialog data-role="reset-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text" data-role="reset-dialog-text">
+                確認要還原預設值嗎？
+              </p>
+              <div class="settings-row">
+                <sp-button data-role="btn-reset-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-reset-confirm" variant="cta"
+                  >確認</sp-button
+                >
+              </div>
+            </div>
+          </dialog>
+
+          <div class="settings-fields" style="margin-top: 10px">
+            <div class="settings-field-row">
+              <label>靠左%</label>
+              <input type="number" data-role="field-leftPercent" step="0.1" />
+              <div class="stepper">
+                <button type="button" data-step-target="leftPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="leftPercent" data-step-dir="down">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>靠上%</label>
+              <input type="number" data-role="field-topPercent" step="0.1" />
+              <div class="stepper">
+                <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
+                <button type="button" data-step-target="topPercent" data-step-dir="down">▲</button>
+                <button type="button" data-step-target="topPercent" data-step-dir="up">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>寬度%</label>
+              <input type="number" data-role="field-widthPercent" step="0.1" />
+              <div class="stepper">
+                <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
+              </div>
             </div>
           </div>
-          <div class="settings-field-row">
-            <label for="setting-topPercent">靠上%</label>
-            <input type="number" id="setting-topPercent" step="0.1" />
-            <div class="stepper">
-              <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
-              <button
-                type="button"
-                data-step-target="setting-topPercent"
-                data-step-dir="down"
-              >
-                ▲
-              </button>
-              <button
-                type="button"
-                data-step-target="setting-topPercent"
-                data-step-dir="up"
-              >
-                ▼
-              </button>
-            </div>
-          </div>
-          <div class="settings-field-row">
-            <label for="setting-widthPercent">寬度%</label>
-            <input type="number" id="setting-widthPercent" step="0.1" />
-            <div class="stepper">
-              <button
-                type="button"
-                data-step-target="setting-widthPercent"
-                data-step-dir="up"
-              >
-                ▲
-              </button>
-              <button
-                type="button"
-                data-step-target="setting-widthPercent"
-                data-step-dir="down"
-              >
-                ▼
-              </button>
-            </div>
-          </div>
-        </div>
 
-        <div class="settings-actions" style="margin-top: 10px">
-          <sp-button id="btn-save-setting" variant="secondary">儲存</sp-button>
-        </div>
+          <div class="settings-actions" style="margin-top: 10px">
+            <sp-button data-role="btn-save-setting" variant="secondary">儲存</sp-button>
+          </div>
 
-        <div class="divider"></div>
-        <div class="settings-row">
-          <sp-button id="btn-start-generate" variant="cta"
-            >產出Resize圖</sp-button
-          >
-          <sp-button id="btn-cancel-settings" variant="secondary"
-            >取消</sp-button
-          >
+          <div class="divider"></div>
+          <div class="settings-row">
+            <sp-button data-role="btn-start-generate" variant="cta"
+              >產出Resize圖</sp-button
+            >
+            <sp-button data-role="btn-cancel-settings" variant="secondary"
+              >取消</sp-button
+            >
+          </div>
         </div>
       </div>
       <div class="divider"></div>
