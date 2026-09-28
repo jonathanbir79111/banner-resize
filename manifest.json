@@ -1,0 +1,42 @@
+{
+  "id": "com.justin.bannerresizer",
+  "name": "Banner Resizer",
+  "version": "1.0.0",
+  "main": "index.html",
+  "host": {
+    "app": "PS",
+    "minVersion": "22.0.0",
+    "data": {
+      "apiVersion": 2
+    }
+  },
+    "manifestVersion": 4,
+    "requiredPermissions": {
+      "localFileSystem": "request"
+    },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "mainPanel",
+      "label": {
+        "default": "開啟 Banner 重設面板"
+      },
+      "minimumSize": {
+        "width": 200,
+        "height": 180
+      },
+      "maximumSize": {
+        "width": 2000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 250,
+        "height": 300
+      },
+      "preferredFloatingSize": {
+        "width": 250,
+        "height": 300
+      }
+    }
+  ]
+}

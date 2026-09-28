@@ -1,0 +1,361 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        color: white;
+        padding: 12px;
+        font-family: sans-serif;
+        box-sizing: border-box;
+        overflow-y: scroll;
+        overflow-x: hidden;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .hint {
+        font-size: 11px;
+        opacity: 0.7;
+        margin: 0 0 12px;
+        color: #555;
+      }
+
+      sp-button {
+        margin-top: 6px;
+        width: 100%;
+        padding: 8px;
+        font-size: 18px;
+        font-weight: 400;
+      }
+
+      .divider {
+        width: 100%;
+        height: 1px;
+        background-color: #0d66d0;
+        margin: 10px 0;
+      }
+
+      .settings-row {
+        display: flex;
+        flex-direction: row;
+        gap: 8px;
+        width: 100%;
+      }
+
+      .settings-row sp-picker {
+        flex: 1;
+        min-width: 0;
+        width: 100%;
+      }
+
+      .picker-col {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .picker-title {
+        font-size: 12px;
+        color: #ccc;
+      }
+
+      .dialog-body {
+        min-width: 280px;
+        padding: 8px 4px;
+        color: white;
+      }
+
+      .dialog-text {
+        font-size: 14px;
+        margin: 0 0 16px;
+        text-align: center;
+      }
+
+      .settings-fields {
+        width: 100%;
+        font-size: 12px;
+      }
+
+      .settings-field-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        margin-bottom: 6px;
+      }
+
+      .settings-field-row label {
+        flex: 0 0 48px;
+        text-align: right;
+        color: white;
+      }
+
+      .settings-field-row input {
+        flex: 1 1 auto;
+        min-width: 0;
+        box-sizing: border-box;
+        color: black;
+        background: white;
+        border: 1px solid #666;
+        border-radius: 3px;
+        padding: 4px 6px;
+      }
+
+      #preview-stage {
+        position: relative;
+        width: 100%;
+        margin-top: 10px;
+        overflow: hidden;
+        background: #222;
+        border: 1px solid #555;
+        box-sizing: border-box;
+      }
+
+      .preview-layer {
+        position: absolute;
+        display: block;
+        height: auto;
+        pointer-events: none;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+
+      .preview-layer.is-draggable {
+        pointer-events: auto;
+        cursor: move;
+      }
+
+      #preview-stage.is-dragging .preview-layer {
+        cursor: grabbing;
+      }
+
+      .preview-layer.is-active {
+        outline: 2px dashed #0d66d0;
+        outline-offset: -1px;
+      }
+
+      .preview-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        margin-top: 4px;
+      }
+
+      .preview-bar .hint {
+        margin: 0;
+        flex: 1;
+        min-width: 0;
+      }
+
+      .preview-bar button {
+        flex: 0 0 auto;
+        font-size: 11px;
+        padding: 3px 8px;
+        color: white;
+        background: #444;
+        border: 1px solid #666;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+
+      .stepper {
+        display: flex;
+        flex-direction: column;
+        flex: 0 0 auto;
+        gap: 2px;
+      }
+
+      .stepper button {
+        width: 26px;
+        height: 13px;
+        padding: 0;
+        font-size: 8px;
+        line-height: 1;
+        color: white;
+        background: #444;
+        border: 1px solid #666;
+        border-radius: 2px;
+        cursor: pointer;
+      }
+
+      .stepper button:active {
+        background: #0d66d0;
+      }
+
+      .settings-actions {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+      }
+
+      .settings-actions sp-button {
+        width: auto;
+        min-width: 120px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="field">
+      <p class="hint">母版需含 $BG $PROD $HEAD $LOGO $SM $CTA；另存 3 個 PSD</p>
+      <sp-button id="btn-resize-1200x629" variant="cta">開始執行</sp-button>
+
+      <div id="resize-settings-panel" style="display: none; width: 100%">
+        <p class="hint">
+          先選版本與圖層,調整下方比例後按「儲存」,再按「產出Resize圖」
+        </p>
+
+        <div class="settings-row">
+          <div class="picker-col">
+            <span class="picker-title">選擇Resize樣板</span>
+            <sp-picker id="setting-variant" size="m">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+          </div>
+          <div class="picker-col">
+            <span class="picker-title">圖層</span>
+            <sp-picker id="setting-element" size="m">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+          </div>
+        </div>
+
+        <div id="preview-stage"></div>
+        <div class="preview-bar">
+          <span id="preview-status" class="hint"></span>
+          <button type="button" id="btn-reset-defaults">還原預設值</button>
+          <button type="button" id="btn-refresh-preview">重新擷取圖層</button>
+        </div>
+
+        <dialog id="reset-dialog">
+          <div class="dialog-body">
+            <p class="dialog-text">確認要還原預設值嗎？</p>
+            <div class="settings-row">
+              <sp-button id="btn-reset-cancel" variant="secondary">取消</sp-button>
+              <sp-button id="btn-reset-confirm" variant="cta">確認</sp-button>
+            </div>
+          </div>
+        </dialog>
+
+        <div class="settings-fields" style="margin-top: 10px">
+          <div class="settings-field-row">
+            <label for="setting-leftPercent">靠左%</label>
+            <input type="number" id="setting-leftPercent" step="0.1" />
+            <div class="stepper">
+              <button
+                type="button"
+                data-step-target="setting-leftPercent"
+                data-step-dir="up"
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                data-step-target="setting-leftPercent"
+                data-step-dir="down"
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+          <div class="settings-field-row">
+            <label for="setting-topPercent">靠上%</label>
+            <input type="number" id="setting-topPercent" step="0.1" />
+            <div class="stepper">
+              <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
+              <button
+                type="button"
+                data-step-target="setting-topPercent"
+                data-step-dir="down"
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                data-step-target="setting-topPercent"
+                data-step-dir="up"
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+          <div class="settings-field-row">
+            <label for="setting-widthPercent">寬度%</label>
+            <input type="number" id="setting-widthPercent" step="0.1" />
+            <div class="stepper">
+              <button
+                type="button"
+                data-step-target="setting-widthPercent"
+                data-step-dir="up"
+              >
+                ▲
+              </button>
+              <button
+                type="button"
+                data-step-target="setting-widthPercent"
+                data-step-dir="down"
+              >
+                ▼
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-actions" style="margin-top: 10px">
+          <sp-button id="btn-save-setting" variant="secondary">儲存</sp-button>
+        </div>
+
+        <div class="divider"></div>
+        <div class="settings-row">
+          <sp-button id="btn-start-generate" variant="cta"
+            >產出Resize圖</sp-button
+          >
+          <sp-button id="btn-cancel-settings" variant="secondary"
+            >取消</sp-button
+          >
+        </div>
+      </div>
+      <div class="divider"></div>
+      <!-- <p class="hint">尺寸,色碼,文字（同一 PSD、多個工作區域）</p>
+      <input
+        type="file"
+        id="input-file"
+        accept=".csv,text/csv"
+        style="display: none"
+      />
+      <sp-button id="btn-open-csv" variant="cta">Upload CSV</sp-button>
+      <div class="divider"></div>
+      <p class="hint">
+        母版需含 $BG $PRODUCT $HEADLINE $CTA；CSV 第一欄如 300x300
+      </p>
+      <input
+        type="file"
+        id="input-banner-csv"
+        accept=".csv,text/csv"
+        style="display: none"
+      />
+      <sp-button id="btn-gen-banner1" variant="cta"
+        >Upload CSV then Gen</sp-button
+      >
+      <div class="divider"></div> -->
+    </div>
+    <script src="index.js"></script>
+  </body>
+</html>
