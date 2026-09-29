@@ -1951,6 +1951,36 @@ function arrayBufferToBase64(buffer) {
   return out;
 }
 
+async function readLayerBoundsByIds(docId, layerId) {
+  try {
+    const [result] = await action.batchPlay(
+      [
+        {
+          _obj: "get",
+          _target: [
+            { _property: "boundsNoEffects" },
+            { _ref: "layer", _id: layerId },
+            { _ref: "document", _id: docId },
+          ],
+        },
+      ],
+      { synchronousExecution: true },
+    );
+    const bounds = result && (result.boundsNoEffects || result.bounds);
+    if (!bounds) {
+      return null;
+    }
+    return {
+      left: unitNumber(bounds.left && bounds.left._value != null ? bounds.left._value : bounds.left),
+      top: unitNumber(bounds.top && bounds.top._value != null ? bounds.top._value : bounds.top),
+      right: unitNumber(bounds.right && bounds.right._value != null ? bounds.right._value : bounds.right),
+      bottom: unitNumber(bounds.bottom && bounds.bottom._value != null ? bounds.bottom._value : bounds.bottom),
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function exportLayerPreviewPng(master, layer, file, name) {
   const temp = await app.createDocument({
     width: unitNumber(master.width),
@@ -1962,11 +1992,15 @@ async function exportLayerPreviewPng(master, layer, file, name) {
   });
 
   try {
-    const copies = await master.duplicateLayers([layer], temp);
+    const baseIds = new Set(listLayers(temp).map((item) => item.id));
+    await master.duplicateLayers([layer], temp);
     app.activeDocument = temp;
-    // 不可退回 temp.layers[0]：透明新文件本身就有一個空白圖層，拿錯會匯出空圖
+    // 跨文件複製時 duplicateLayers 的回傳值可能指向錯的文件／圖層（讀到的邊界會是 0），
+    // 所以不用回傳值，直接到暫存文件裡重新找：先依名稱，再找「不是原本空白圖層」的那個
     const copy =
-      (copies && copies[0]) || findTopLayerByName(temp, layer.name) || null;
+      findLayerByName(temp, layer.name) ||
+      listLayers(temp).find((item) => !baseIds.has(item.id)) ||
+      null;
     if (!copy) {
       throw new Error(`${name} 複製失敗（若正在編輯文字，請先按 Enter 或 Esc 結束編輯）`);
     }
@@ -1977,11 +2011,15 @@ async function exportLayerPreviewPng(master, layer, file, name) {
     }
 
     // 與排版邏輯同用 boundsNoEffects：把圖層拉到 (0,0) 再把畫布縮成圖層大小
-    const b = readLayerBounds(copy);
+    let b = readLayerBounds(copy);
+    if (!(b.right - b.left >= 1 && b.bottom - b.top >= 1)) {
+      // DOM 讀不到時改用 batchPlay 直接向 Photoshop 查詢
+      b = (await readLayerBoundsByIds(temp.id, copy.id)) || b;
+    }
     const rawWidth = b.right - b.left;
     const rawHeight = b.bottom - b.top;
     if (!(rawWidth >= 1 && rawHeight >= 1)) {
-      throw new Error(`${name} 是空白圖層，無法產生預覽`);
+      throw new Error(`${name} 讀不到圖層範圍，無法產生預覽`);
     }
     const width = Math.round(rawWidth);
     const height = Math.round(rawHeight);
