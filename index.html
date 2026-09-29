@@ -184,6 +184,17 @@
         border-style: solid;
       }
 
+      .layer-buttons {
+        display: flex;
+        flex-direction: row;
+        gap: 6px;
+        flex: 1 1 auto;
+      }
+
+      .layer-buttons .small-btn {
+        flex: 1 1 0;
+      }
+
       .align-picker {
         flex: 1 1 0;
         min-width: 0;
@@ -644,6 +655,15 @@
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
             </div>
+            <div class="settings-field-row">
+              <label>層級</label>
+              <div class="layer-buttons">
+                <button type="button" class="small-btn" data-layer-move="front">最前</button>
+                <button type="button" class="small-btn" data-layer-move="forward">往前</button>
+                <button type="button" class="small-btn" data-layer-move="backward">往後</button>
+                <button type="button" class="small-btn" data-layer-move="back">最後</button>
+              </div>
+            </div>
           </div>
 
           <div class="settings-actions" style="margin-top: 10px">
@@ -856,6 +876,15 @@
               <sp-picker data-role="align-y" size="s" class="align-picker">
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
+            </div>
+            <div class="settings-field-row">
+              <label>層級</label>
+              <div class="layer-buttons">
+                <button type="button" class="small-btn" data-layer-move="front">最前</button>
+                <button type="button" class="small-btn" data-layer-move="forward">往前</button>
+                <button type="button" class="small-btn" data-layer-move="backward">往後</button>
+                <button type="button" class="small-btn" data-layer-move="back">最後</button>
+              </div>
             </div>
           </div>
 
