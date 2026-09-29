@@ -1928,7 +1928,7 @@ function arrayBufferToBase64(buffer) {
   return out;
 }
 
-async function exportLayerPreviewPng(master, layer, file) {
+async function exportLayerPreviewPng(master, layer, file, name) {
   const temp = await app.createDocument({
     width: unitNumber(master.width),
     height: unitNumber(master.height),
@@ -1941,7 +1941,12 @@ async function exportLayerPreviewPng(master, layer, file) {
   try {
     const copies = await master.duplicateLayers([layer], temp);
     app.activeDocument = temp;
-    const copy = (copies && copies[0]) || temp.layers[0];
+    // 不可退回 temp.layers[0]：透明新文件本身就有一個空白圖層，拿錯會匯出空圖
+    const copy =
+      (copies && copies[0]) || findTopLayerByName(temp, layer.name) || null;
+    if (!copy) {
+      throw new Error(`${name} 複製失敗（若正在編輯文字，請先按 Enter 或 Esc 結束編輯）`);
+    }
     try {
       copy.visible = true;
     } catch (_error) {
@@ -1950,8 +1955,13 @@ async function exportLayerPreviewPng(master, layer, file) {
 
     // 與排版邏輯同用 boundsNoEffects：把圖層拉到 (0,0) 再把畫布縮成圖層大小
     const b = readLayerBounds(copy);
-    const width = Math.max(Math.round(b.right - b.left), 1);
-    const height = Math.max(Math.round(b.bottom - b.top), 1);
+    const rawWidth = b.right - b.left;
+    const rawHeight = b.bottom - b.top;
+    if (!(rawWidth >= 1 && rawHeight >= 1)) {
+      throw new Error(`${name} 是空白圖層，無法產生預覽`);
+    }
+    const width = Math.round(rawWidth);
+    const height = Math.round(rawHeight);
     await translateLayer(copy, -b.left, -b.top);
     await temp.resizeCanvas(width, height, constants.AnchorPosition.TOPLEFT);
 
@@ -1987,14 +1997,16 @@ async function buildPreviewCache(master) {
   await core.executeAsModal(
     async () => {
       for (const name of MCD_SMART_LAYER_NAMES) {
+        // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
         const file = await tempFolder.createFile(
-          `preview-${name.replace("$", "")}.png`,
+          `preview-${master.id}-${name.replace("$", "")}.png`,
           { overwrite: true },
         );
         const size = await exportLayerPreviewPng(
           master,
           sourceLayers[name],
           file,
+          name,
         );
         const buffer = await file.read({ format: formats.binary });
         images[name] = {
@@ -2843,164 +2855,229 @@ function createResizeWorkspace(root) {
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
   }
 
-  // ----- 樣板管理視窗：勾選後才能編輯（改名）或刪除 -----
+  // ----- 管理視窗（樣板／模組共用）：勾選後才能編輯（改名）或刪除 -----
+  //
+  // config:
+  //   prefix       HTML data-role 前綴，例如 "variant-manager"
+  //   title        視窗標題
+  //   emptyLabel   名稱空白時顯示的文字
+  //   listItems()  目前的項目陣列
+  //   getName(item) / setName(item, name)
+  //   isSameName(a, b)
+  //   canDelete(item) 可省略
+  //   remove(item) 從資料中移除並調整選取
+  //   afterChange() 資料變動後重畫面板
+  //   deletedMessage(item)
+  function createListManager(config) {
+    const role = (suffix) => el(`${config.prefix}${suffix}`);
+    const ui = {
+      dialog: role(""),
+      list: role("-list"),
+      listView: role("-list-view"),
+      confirmView: role("-confirm-view"),
+    };
+    let rows = [];
+    let pendingDelete = null;
 
-  const manager = {
-    dialog: el("variant-manager"),
-    list: el("variant-manager-list"),
-    listView: el("variant-manager-list-view"),
-    confirmView: el("variant-manager-confirm-view"),
-    rows: [],
-    pendingDelete: null,
-  };
+    function showView(confirm) {
+      ui.listView.style.display = confirm ? "none" : "block";
+      ui.confirmView.style.display = confirm ? "block" : "none";
+    }
 
-  function showManagerView(confirm) {
-    manager.listView.style.display = confirm ? "none" : "block";
-    manager.confirmView.style.display = confirm ? "block" : "none";
-  }
+    function makeButton(label, disabled, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "small-btn";
+      button.textContent = label;
+      button.disabled = disabled;
+      button.addEventListener("click", onClick);
+      return button;
+    }
 
-  function renderManagerList() {
-    manager.list.innerHTML = "";
-    manager.rows.forEach((row) => {
-      const line = document.createElement("div");
-      line.className = "manager-row";
+    function renderList() {
+      ui.list.innerHTML = "";
+      rows.forEach((row) => {
+        const line = document.createElement("div");
+        line.className = "manager-row";
 
-      const check = document.createElement("input");
-      check.type = "checkbox";
-      check.checked = row.checked;
-      check.addEventListener("change", () => {
-        row.checked = check.checked;
-        if (!row.checked) {
-          row.editing = false;
-        }
-        renderManagerList();
-      });
-      line.appendChild(check);
-
-      if (row.editing) {
-        const input = document.createElement("input");
-        input.type = "text";
-        input.className = "text-input manager-name";
-        input.value = row.name;
-        input.classList.toggle("is-invalid", row.invalid);
-        input.addEventListener("input", () => {
-          row.name = input.value;
-          row.invalid = false;
-          input.classList.remove("is-invalid");
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = row.checked;
+        check.addEventListener("change", () => {
+          row.checked = check.checked;
+          if (!row.checked) {
+            row.editing = false;
+          }
+          renderList();
         });
-        line.appendChild(input);
-      } else {
-        const label = document.createElement("span");
-        label.className = "manager-name";
-        label.textContent = row.name || "（未命名版型）";
-        line.appendChild(label);
+        line.appendChild(check);
+
+        if (row.editing) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "text-input manager-name";
+          input.value = row.name;
+          input.classList.toggle("is-invalid", row.invalid);
+          input.addEventListener("input", () => {
+            row.name = input.value;
+            row.invalid = false;
+            input.classList.remove("is-invalid");
+          });
+          line.appendChild(input);
+        } else {
+          const label = document.createElement("span");
+          label.className = "manager-name";
+          label.textContent = row.name || config.emptyLabel;
+          line.appendChild(label);
+        }
+
+        line.appendChild(
+          makeButton("編輯", !row.checked, () => {
+            row.editing = true;
+            renderList();
+          }),
+        );
+        const deletable = !config.canDelete || config.canDelete(row.item);
+        line.appendChild(
+          makeButton("刪除", !row.checked || !deletable, () => {
+            pendingDelete = row;
+            showView(true);
+          }),
+        );
+
+        ui.list.appendChild(line);
+      });
+    }
+
+    function open() {
+      commitFields();
+      rows = config.listItems().map((item) => ({
+        item,
+        name: config.getName(item),
+        checked: false,
+        editing: false,
+        invalid: false,
+      }));
+      pendingDelete = null;
+      renderList();
+      showView(false);
+      showDialog(ui.dialog, config.title, {
+        resize: "both",
+        size: { width: 460, height: 320 },
+      });
+    }
+
+    async function confirmDelete() {
+      const row = pendingDelete;
+      pendingDelete = null;
+      showView(false);
+      if (!row) {
+        return;
+      }
+      config.remove(row.item);
+      rows = rows.filter((item) => item !== row);
+      config.afterChange();
+      renderList();
+      await persist(config.deletedMessage(row.item));
+    }
+
+    async function save() {
+      // 名稱不可空白、不可重複
+      let valid = true;
+      rows.forEach((row, i) => {
+        const name = row.name.trim();
+        const duplicate = rows.some(
+          (other, j) => j !== i && config.isSameName(other.name.trim(), name),
+        );
+        row.invalid = row.editing && (!name || duplicate);
+        if (row.invalid) {
+          valid = false;
+        }
+      });
+      if (!valid) {
+        renderList();
+        return;
       }
 
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "small-btn";
-      editBtn.textContent = "編輯";
-      editBtn.disabled = !row.checked;
-      editBtn.addEventListener("click", () => {
-        row.editing = true;
-        renderManagerList();
+      rows.forEach((row) => {
+        if (row.editing) {
+          config.setName(row.item, row.name.trim());
+        }
       });
-      line.appendChild(editBtn);
-
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "small-btn";
-      deleteBtn.textContent = "刪除";
-      deleteBtn.disabled = !row.checked;
-      deleteBtn.addEventListener("click", () => {
-        manager.pendingDelete = row;
-        showManagerView(true);
-      });
-      line.appendChild(deleteBtn);
-
-      manager.list.appendChild(line);
-    });
-  }
-
-  function openVariantManager() {
-    const template = currentTemplate();
-    if (!template) {
-      setStatus("請先選擇或新增模組。");
-      return;
+      ui.dialog.close("save");
+      config.afterChange();
+      await persist("已儲存改動", "已儲存改動");
     }
-    commitFields();
-    manager.rows = template.values.variants.map((variant) => ({
-      variant,
-      name: variant.outputDocument,
-      checked: false,
-      editing: false,
-      invalid: false,
-    }));
-    manager.pendingDelete = null;
-    renderManagerList();
-    showManagerView(false);
-    showDialog(manager.dialog, "編輯 Resize 樣板", {
-      resize: "both",
-      size: { width: 460, height: 320 },
+
+    role("-save").addEventListener("click", save);
+    role("-close").addEventListener("click", () => {
+      ui.dialog.close("cancel");
     });
+    role("-delete-confirm").addEventListener("click", confirmDelete);
+    role("-delete-cancel").addEventListener("click", () => {
+      pendingDelete = null;
+      showView(false);
+    });
+
+    return { open };
   }
 
-  function afterVariantsChanged() {
-    clampSelection();
-    renderVariantPicker();
-    loadFields();
-    renderPreview();
-  }
-
-  async function confirmDeleteVariant() {
-    const row = manager.pendingDelete;
-    const template = currentTemplate();
-    manager.pendingDelete = null;
-    showManagerView(false);
-    if (!row || !template) {
-      return;
-    }
-    const variants = template.values.variants;
-    const index = variants.indexOf(row.variant);
-    if (index >= 0) {
+  const variantManager = createListManager({
+    prefix: "variant-manager",
+    title: "編輯 Resize 樣板",
+    emptyLabel: "（未命名版型）",
+    listItems: () => (currentTemplate() ? currentTemplate().values.variants : []),
+    getName: (variant) => variant.outputDocument,
+    setName: (variant, name) => {
+      variant.outputDocument = name;
+    },
+    isSameName: isSameVariantName,
+    remove: (variant) => {
+      const variants = currentTemplate().values.variants;
+      const index = variants.indexOf(variant);
+      if (index < 0) {
+        return;
+      }
       variants.splice(index, 1);
       if (state.variantIndex > index || state.variantIndex >= variants.length) {
         state.variantIndex = Math.max(state.variantIndex - 1, 0);
       }
-    }
-    manager.rows = manager.rows.filter((item) => item !== row);
-    afterVariantsChanged();
-    renderManagerList();
-    await persist(`已刪除樣板「${variantLabel(row.variant)}」`);
-  }
+    },
+    afterChange: () => {
+      clampSelection();
+      renderVariantPicker();
+      loadFields();
+      renderPreview();
+    },
+    deletedMessage: (variant) => `已刪除樣板「${variantLabel(variant)}」`,
+  });
 
-  async function saveVariantManager() {
-    // 名稱不可空白、不可重複（「左右」與「左右.psd」視為同名）
-    let valid = true;
-    manager.rows.forEach((row, i) => {
-      const name = row.name.trim();
-      const duplicate = manager.rows.some(
-        (other, j) => j !== i && isSameVariantName(other.name.trim(), name),
-      );
-      row.invalid = row.editing && (!name || duplicate);
-      if (row.invalid) {
-        valid = false;
+  const templateManager = createListManager({
+    prefix: "template-manager",
+    title: "編輯模組",
+    emptyLabel: "（未命名模組）",
+    listItems: () => moduleStore.templates,
+    getName: (template) => template.name,
+    setName: (template, name) => {
+      template.name = name;
+    },
+    isSameName: (a, b) => a === b,
+    // 「預設」模組是新模組複製的來源，不開放刪除（可改名）
+    canDelete: (template) => !template.builtin,
+    remove: (template) => {
+      const index = moduleStore.templates.indexOf(template);
+      if (index < 0) {
+        return;
       }
-    });
-    if (!valid) {
-      renderManagerList();
-      return;
-    }
-
-    manager.rows.forEach((row) => {
-      if (row.editing) {
-        row.variant.outputDocument = row.name.trim();
+      moduleStore.templates.splice(index, 1);
+      if (state.templateIndex > index || state.templateIndex >= moduleStore.templates.length) {
+        state.templateIndex = Math.max(state.templateIndex - 1, 0);
+        state.variantIndex = 0;
       }
-    });
-    manager.dialog.close("save");
-    afterVariantsChanged();
-    await persist("已儲存樣板改動", "已儲存改動");
-  }
+    },
+    afterChange: renderAll,
+    deletedMessage: (template) => `已刪除模組「${template.name}」`,
+  });
 
   // ----- 事件 -----
 
@@ -3050,16 +3127,14 @@ function createResizeWorkspace(root) {
     picker.addEventListener("change", updatePreviewFromFields);
   });
 
-  el("btn-manage-variants").addEventListener("click", openVariantManager);
-  el("btn-manager-save").addEventListener("click", saveVariantManager);
-  el("btn-manager-close").addEventListener("click", () => {
-    manager.dialog.close("cancel");
+  el("btn-manage-variants").addEventListener("click", () => {
+    if (!currentTemplate()) {
+      setStatus("請先選擇或新增模組。");
+      return;
+    }
+    variantManager.open();
   });
-  el("btn-delete-confirm").addEventListener("click", confirmDeleteVariant);
-  el("btn-delete-cancel").addEventListener("click", () => {
-    manager.pendingDelete = null;
-    showManagerView(false);
-  });
+  el("btn-manage-templates").addEventListener("click", () => templateManager.open());
 
   el("btn-reset-confirm").addEventListener("click", () => {
     el("reset-dialog").close("confirm");
