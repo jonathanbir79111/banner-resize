@@ -1967,6 +1967,29 @@ function readPickerIndex(event) {
   return Number.isFinite(n) ? n : 0;
 }
 
+const TOAST_DURATION_MS = 1000;
+
+// 1 秒後自動關閉的提示視窗
+async function showToast(message) {
+  const dialog = document.getElementById("toast-dialog");
+  document.getElementById("toast-text").textContent = message;
+  const shown = dialog.uxpShowModal
+    ? dialog.uxpShowModal({ title: "", resize: "none" })
+    : dialog.showModal();
+  setTimeout(() => {
+    try {
+      dialog.close();
+    } catch (_error) {
+      // 已關閉
+    }
+  }, TOAST_DURATION_MS);
+  try {
+    await shown;
+  } catch (_error) {
+    // 關閉時的 reject 略過
+  }
+}
+
 function showDialog(dialog, title) {
   const show = dialog.uxpShowModal
     ? dialog.uxpShowModal({ title, resize: "none" })
@@ -2440,11 +2463,14 @@ function createResizeWorkspace(root) {
 
   // ----- 儲存 -----
 
-  async function persist(message) {
+  async function persist(message, toast) {
     try {
       await saveModuleStore();
       notifyModuleStoreChanged(workspace);
       setStatus(message);
+      if (toast) {
+        await showToast(toast);
+      }
       return true;
     } catch (error) {
       await app.showAlert(`module.json 寫入失敗：${error.message || error}`);
@@ -2532,19 +2558,16 @@ function createResizeWorkspace(root) {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
       },
-      values: {
-        width: BUILTIN_RESIZE_VALUES.width,
-        height: BUILTIN_RESIZE_VALUES.height,
-        variants: [newDraftVariant()],
-      },
+      // 新模組先帶入內建三個樣板與其預設值
+      values: deepClone(BUILTIN_RESIZE_VALUES),
     });
     state.templateIndex = moduleStore.templates.length - 1;
     state.variantIndex = 0;
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
 
-    await persist(`已新增模組「${name}」，請輸入版型名稱後按「新增」。`);
     renderAll();
+    await persist(`已新增模組「${name}」`, "成功新增模組");
   }
 
   // ----- 版型（variant / outputDocument）-----
@@ -2583,22 +2606,18 @@ function createResizeWorkspace(root) {
     }
     variantNameInput.value = "";
 
-    await persist(`已新增版型「${name}」。`);
     renderVariantPicker();
     loadFields();
     renderPreview();
+    await persist(`已新增樣板「${name}」`, "成功新增樣板");
   }
 
-  function defaultElementsFor(template, variant) {
-    if (template.builtin) {
-      const builtin = BUILTIN_RESIZE_VALUES.variants.find(
-        (item) => item.outputDocument === variant.outputDocument,
-      );
-      if (builtin) {
-        return deepClone(builtin.elements);
-      }
-    }
-    return deepClone(DEFAULT_VARIANT_ELEMENTS);
+  function defaultElementsFor(variant) {
+    // 與內建樣板同名就還原成內建數值，其餘還原成置中預設值
+    const builtin = BUILTIN_RESIZE_VALUES.variants.find((item) =>
+      isSameVariantName(item.outputDocument, variant.outputDocument || ""),
+    );
+    return deepClone(builtin ? builtin.elements : DEFAULT_VARIANT_ELEMENTS);
   }
 
   async function resetVariant() {
@@ -2613,10 +2632,166 @@ function createResizeWorkspace(root) {
       return;
     }
     // $BG 不在預設值內，還原後回到自動 cover
-    variant.elements = defaultElementsFor(template, variant);
+    variant.elements = defaultElementsFor(variant);
     loadFields();
     renderPreview();
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
+  }
+
+  // ----- 樣板管理視窗：勾選後才能編輯（改名）或刪除 -----
+
+  const manager = {
+    dialog: el("variant-manager"),
+    list: el("variant-manager-list"),
+    listView: el("variant-manager-list-view"),
+    confirmView: el("variant-manager-confirm-view"),
+    rows: [],
+    pendingDelete: null,
+  };
+
+  function showManagerView(confirm) {
+    manager.listView.style.display = confirm ? "none" : "block";
+    manager.confirmView.style.display = confirm ? "block" : "none";
+  }
+
+  function renderManagerList() {
+    manager.list.innerHTML = "";
+    manager.rows.forEach((row) => {
+      const line = document.createElement("div");
+      line.className = "manager-row";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = row.checked;
+      check.addEventListener("change", () => {
+        row.checked = check.checked;
+        if (!row.checked) {
+          row.editing = false;
+        }
+        renderManagerList();
+      });
+      line.appendChild(check);
+
+      if (row.editing) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "text-input manager-name";
+        input.value = row.name;
+        input.classList.toggle("is-invalid", row.invalid);
+        input.addEventListener("input", () => {
+          row.name = input.value;
+          row.invalid = false;
+          input.classList.remove("is-invalid");
+        });
+        line.appendChild(input);
+      } else {
+        const label = document.createElement("span");
+        label.className = "manager-name";
+        label.textContent = row.name || "（未命名版型）";
+        line.appendChild(label);
+      }
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "small-btn";
+      editBtn.textContent = "編輯";
+      editBtn.disabled = !row.checked;
+      editBtn.addEventListener("click", () => {
+        row.editing = true;
+        renderManagerList();
+      });
+      line.appendChild(editBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "small-btn";
+      deleteBtn.textContent = "刪除";
+      deleteBtn.disabled = !row.checked;
+      deleteBtn.addEventListener("click", () => {
+        manager.pendingDelete = row;
+        showManagerView(true);
+      });
+      line.appendChild(deleteBtn);
+
+      manager.list.appendChild(line);
+    });
+  }
+
+  function openVariantManager() {
+    const template = currentTemplate();
+    if (!template) {
+      setStatus("請先選擇或新增模組。");
+      return;
+    }
+    commitFields();
+    manager.rows = template.values.variants.map((variant) => ({
+      variant,
+      name: variant.outputDocument,
+      checked: false,
+      editing: false,
+      invalid: false,
+    }));
+    manager.pendingDelete = null;
+    renderManagerList();
+    showManagerView(false);
+    showDialog(manager.dialog, "編輯 Resize 樣板");
+  }
+
+  function afterVariantsChanged() {
+    clampSelection();
+    renderVariantPicker();
+    loadFields();
+    renderPreview();
+  }
+
+  async function confirmDeleteVariant() {
+    const row = manager.pendingDelete;
+    const template = currentTemplate();
+    manager.pendingDelete = null;
+    showManagerView(false);
+    if (!row || !template) {
+      return;
+    }
+    const variants = template.values.variants;
+    const index = variants.indexOf(row.variant);
+    if (index >= 0) {
+      variants.splice(index, 1);
+      if (state.variantIndex > index || state.variantIndex >= variants.length) {
+        state.variantIndex = Math.max(state.variantIndex - 1, 0);
+      }
+    }
+    manager.rows = manager.rows.filter((item) => item !== row);
+    afterVariantsChanged();
+    renderManagerList();
+    await persist(`已刪除樣板「${variantLabel(row.variant)}」`);
+  }
+
+  async function saveVariantManager() {
+    // 名稱不可空白、不可重複（「左右」與「左右.psd」視為同名）
+    let valid = true;
+    manager.rows.forEach((row, i) => {
+      const name = row.name.trim();
+      const duplicate = manager.rows.some(
+        (other, j) => j !== i && isSameVariantName(other.name.trim(), name),
+      );
+      row.invalid = row.editing && (!name || duplicate);
+      if (row.invalid) {
+        valid = false;
+      }
+    });
+    if (!valid) {
+      renderManagerList();
+      return;
+    }
+
+    manager.rows.forEach((row) => {
+      if (row.editing) {
+        row.variant.outputDocument = row.name.trim();
+      }
+    });
+    manager.dialog.close("save");
+    afterVariantsChanged();
+    await persist("已儲存樣板改動", "已儲存改動");
   }
 
   // ----- 事件 -----
@@ -2663,6 +2838,17 @@ function createResizeWorkspace(root) {
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
 
+  el("btn-manage-variants").addEventListener("click", openVariantManager);
+  el("btn-manager-save").addEventListener("click", saveVariantManager);
+  el("btn-manager-close").addEventListener("click", () => {
+    manager.dialog.close("cancel");
+  });
+  el("btn-delete-confirm").addEventListener("click", confirmDeleteVariant);
+  el("btn-delete-cancel").addEventListener("click", () => {
+    manager.pendingDelete = null;
+    showManagerView(false);
+  });
+
   el("btn-reset-confirm").addEventListener("click", () => {
     el("reset-dialog").close("confirm");
   });
@@ -2673,7 +2859,8 @@ function createResizeWorkspace(root) {
   el("btn-save-setting").addEventListener("click", async () => {
     commitFields();
     await persist(
-      `已儲存 ${variantLabel(currentVariant())} 的 ${state.elementName} 設定`,
+      `已儲存 ${variantLabel(currentVariant())} 的設定值`,
+      "成功儲存設定值",
     );
   });
 
