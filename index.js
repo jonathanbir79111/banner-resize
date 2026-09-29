@@ -2584,9 +2584,21 @@ function createResizeWorkspace(root) {
     return index >= 0 ? index + 2 : fallbackIndex + 1;
   }
 
+  // UXP 不支援 z-index，疊放只看 DOM 先後：依層級由下往上把圖片重新排進預覽區，
+  // 並插在選取框之前，讓選取框與控制點永遠在最上面
   function applyLayerOrder() {
-    Object.keys(state.images).forEach((name) => {
-      state.images[name].style.zIndex = String(zIndexFor(name, 0));
+    const names = Object.keys(state.images).sort(
+      (a, b) => zIndexFor(a, 0) - zIndexFor(b, 0),
+    );
+    const anchor = state.selection ? state.selection.box : null;
+    names.forEach((name) => {
+      const img = state.images[name];
+      img.style.zIndex = String(zIndexFor(name, 0));
+      if (anchor) {
+        stage.insertBefore(img, anchor);
+      } else {
+        stage.appendChild(img);
+      }
     });
   }
 
@@ -2621,6 +2633,51 @@ function createResizeWorkspace(root) {
     setStatus(`${name} 目前在第 ${position} 層（由上往下數），按「儲存設定值」保存。`);
   }
 
+  /**
+   * 同步圖層大小：以目前樣板各圖層的寬度%／高度% 為準，套到同模組的其他樣板。
+   * 只改大小，各樣板原本的靠左%、靠上% 不變。
+   * $BG 若目前是自動鋪滿，其他樣板也改回自動鋪滿。
+   */
+  async function syncLayerSizes() {
+    const template = currentTemplate();
+    const source = currentVariant();
+    if (!template || !source) {
+      return;
+    }
+    if (!(await showDialog(el("sync-dialog"), "同步圖層大小"))) {
+      return;
+    }
+    commitFields();
+    for (const variant of template.values.variants) {
+      if (variant === source) {
+        continue;
+      }
+      for (const name of MCD_POSITION_ELEMENT_NAMES) {
+        copyFrameSize(source.elements[name], variant.elements[name]);
+      }
+      if (!source.elements.$BG) {
+        delete variant.elements.$BG;
+      } else if (!variant.elements.$BG) {
+        variant.elements.$BG = deepClone(source.elements.$BG);
+      } else {
+        copyFrameSize(source.elements.$BG, variant.elements.$BG);
+      }
+    }
+    await persist(
+      `已將「${variantLabel(source)}」的圖層大小同步到其他樣板`,
+      "已同步圖層大小",
+    );
+  }
+
+  function copyFrameSize(from, to) {
+    to.widthPercent = from.widthPercent;
+    if (hasFrameHeight(from)) {
+      to.heightPercent = from.heightPercent;
+    } else {
+      delete to.heightPercent;
+    }
+  }
+
   function updateLayerButtons() {
     root.querySelectorAll("[data-layer-move]").forEach((button) => {
       button.disabled = state.elementName === "$BG";
@@ -2651,6 +2708,7 @@ function createResizeWorkspace(root) {
     });
 
     state.selection = createSelection(cache.order.length + 1);
+    applyLayerOrder();
 
     resizeStage();
     updateHighlight();
@@ -3278,6 +3336,13 @@ function createResizeWorkspace(root) {
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-lock-heights").addEventListener("click", lockFrameHeights);
+  el("btn-sync-sizes").addEventListener("click", syncLayerSizes);
+  el("btn-sync-confirm").addEventListener("click", () => {
+    el("sync-dialog").close("confirm");
+  });
+  el("btn-sync-cancel").addEventListener("click", () => {
+    el("sync-dialog").close("cancel");
+  });
   root.querySelectorAll("[data-layer-move]").forEach((button) => {
     button.addEventListener("click", () => moveLayer(button.getAttribute("data-layer-move")));
   });
