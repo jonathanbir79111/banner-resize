@@ -169,6 +169,26 @@
         cursor: nwse-resize;
       }
 
+      .preview-handle.is-n,
+      .preview-handle.is-s {
+        cursor: ns-resize;
+      }
+
+      .preview-handle.is-e,
+      .preview-handle.is-w {
+        cursor: ew-resize;
+      }
+
+      /* 有設定框高時框線改實線，表示圖層會被限制在框內 */
+      .preview-selection.is-limited {
+        border-style: solid;
+      }
+
+      .align-picker {
+        flex: 1 1 0;
+        min-width: 0;
+      }
+
       .preview-handle.is-ne,
       .preview-handle.is-sw {
         cursor: nesw-resize;
@@ -456,6 +476,7 @@
           <div class="preview-stage" data-role="preview-stage"></div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
+            <button type="button" data-role="btn-lock-heights">鎖定框高</button>
             <button type="button" data-role="btn-reset-defaults">還原預設值</button>
             <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
           </div>
@@ -532,6 +553,28 @@
                 <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
                 <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
               </div>
+            </div>
+            <div class="settings-field-row">
+              <label>高度%</label>
+              <input
+                type="number"
+                data-role="field-heightPercent"
+                step="0.1"
+                placeholder="不限（隨圖層比例）"
+              />
+              <div class="stepper">
+                <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>對齊</label>
+              <sp-picker data-role="align-x" size="s" class="align-picker">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
+              <sp-picker data-role="align-y" size="s" class="align-picker">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
             </div>
           </div>
 
@@ -609,6 +652,7 @@
           <div class="preview-stage" data-role="preview-stage"></div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
+            <button type="button" data-role="btn-lock-heights">鎖定框高</button>
             <button type="button" data-role="btn-reset-defaults">還原預設值</button>
             <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
           </div>
@@ -685,6 +729,28 @@
                 <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
                 <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
               </div>
+            </div>
+            <div class="settings-field-row">
+              <label>高度%</label>
+              <input
+                type="number"
+                data-role="field-heightPercent"
+                step="0.1"
+                placeholder="不限（隨圖層比例）"
+              />
+              <div class="stepper">
+                <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
+                <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>對齊</label>
+              <sp-picker data-role="align-x" size="s" class="align-picker">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
+              <sp-picker data-role="align-y" size="s" class="align-picker">
+                <sp-menu slot="options"></sp-menu>
+              </sp-picker>
             </div>
           </div>
 

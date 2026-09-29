@@ -1126,6 +1126,12 @@ const MCD_POSITION_ELEMENT_NAMES = ["$LOGO", "$HEAD", "$PROD", "$SM", "$CTA"];
 // 面板可選取的圖層；$BG 沒有設定值時自動 cover 鋪滿，拖拉或縮放後才記錄數值
 const EDITABLE_ELEMENT_NAMES = [...MCD_POSITION_ELEMENT_NAMES, "$BG"];
 const SPEC_KEYS = ["leftPercent", "topPercent", "widthPercent"];
+// 面板欄位：高度% 可留空（不限高度，高度隨圖層比例）
+const FIELD_KEYS = [...SPEC_KEYS, "heightPercent"];
+const ALIGN_X = { left: 0, center: 0.5, right: 1 };
+const ALIGN_Y = { top: 0, middle: 0.5, bottom: 1 };
+const ALIGN_X_KEYS = Object.keys(ALIGN_X);
+const ALIGN_Y_KEYS = Object.keys(ALIGN_Y);
 
 // 內建樣板：module.json 第一次建立時會以此當第 0 筆模組（builtin: true）。
 const BUILTIN_RESIZE_VALUES = {
@@ -1284,6 +1290,20 @@ function isSameVariantName(a, b) {
 //   ]
 // }
 
+function normalizeFrameOptions(src, out) {
+  const h = Number(src.heightPercent);
+  if (src.heightPercent != null && Number.isFinite(h) && h > 0) {
+    out.heightPercent = h;
+  }
+  if (src.alignX in ALIGN_X) {
+    out.alignX = src.alignX;
+  }
+  if (src.alignY in ALIGN_Y) {
+    out.alignY = src.alignY;
+  }
+  return out;
+}
+
 function normalizeElements(raw) {
   const out = {};
   for (const name of MCD_POSITION_ELEMENT_NAMES) {
@@ -1295,6 +1315,7 @@ function normalizeElements(raw) {
         ? n
         : DEFAULT_VARIANT_ELEMENTS[name][key];
     }
+    normalizeFrameOptions(src, out[name]);
   }
   const bg = raw && raw.$BG;
   if (bg && SPEC_KEYS.every((key) => Number.isFinite(Number(bg[key])))) {
@@ -1302,8 +1323,53 @@ function normalizeElements(raw) {
     for (const key of SPEC_KEYS) {
       out.$BG[key] = Number(bg[key]);
     }
+    normalizeFrameOptions(bg, out.$BG);
   }
   return out;
+}
+
+// ---------- 框 + 等比放入 ----------
+//
+// 每個圖層的設定是一個「框」：靠左% / 靠上% / 寬度% / 高度%（可不限）。
+// 圖層等比縮放到剛好放進框內（contain），再依對齊方式放在框內。
+// 高度% 不限時，圖層寬度等於框寬、高度隨圖層比例（與舊版行為相同）。
+
+function hasFrameHeight(spec) {
+  return Number.isFinite(spec.heightPercent) && spec.heightPercent > 0;
+}
+
+// 未指定對齊時依框的位置推算：框中心偏左靠左、偏右靠右；產品與背景垂直置中
+function resolveAlign(name, spec) {
+  const center = spec.leftPercent + spec.widthPercent / 2;
+  const autoX = center < 40 ? "left" : center > 60 ? "right" : "center";
+  const autoY = name === "$PROD" || name === "$BG" ? "middle" : "top";
+  return {
+    alignX: spec.alignX in ALIGN_X ? spec.alignX : autoX,
+    alignY: spec.alignY in ALIGN_Y ? spec.alignY : autoY,
+  };
+}
+
+/**
+ * 算出圖層放進框後的實際位置（皆為畫布百分比）。
+ * aspectPercent = 圖層高% ÷ 圖層寬%（已含畫布寬高比）。
+ *   自然高度 = 寬度% × aspectPercent
+ *   縮放     = 有框高且自然高度超過框高 ? 框高 ÷ 自然高度 : 1
+ *   位置     = 框起點 + (框尺寸 − 圖層尺寸) × 對齊比例（0 / 0.5 / 1）
+ */
+function fitInFrame(name, spec, aspectPercent) {
+  const naturalHeight = spec.widthPercent * aspectPercent;
+  const limited = hasFrameHeight(spec) && naturalHeight > spec.heightPercent;
+  const scale = limited ? spec.heightPercent / naturalHeight : 1;
+  const width = spec.widthPercent * scale;
+  const height = naturalHeight * scale;
+  const frameHeight = hasFrameHeight(spec) ? spec.heightPercent : height;
+  const { alignX, alignY } = resolveAlign(name, spec);
+  return {
+    left: spec.leftPercent + (spec.widthPercent - width) * ALIGN_X[alignX],
+    top: spec.topPercent + (frameHeight - height) * ALIGN_Y[alignY],
+    width,
+    height,
+  };
 }
 
 function normalizeTemplate(raw) {
@@ -1324,6 +1390,11 @@ function normalizeTemplate(raw) {
       })),
     },
   };
+}
+
+function builtinTemplateValues() {
+  const builtin = moduleStore.templates.find((template) => template.builtin);
+  return builtin ? builtin.values : BUILTIN_RESIZE_VALUES;
 }
 
 function newDraftVariant() {
@@ -1607,25 +1678,33 @@ async function createMcdDocumentFromMaster(
   return newDoc;
 }
 
-async function layoutSmartByPercents(layer, canvasW, canvasH, spec) {
-  const targetW = (canvasW * spec.widthPercent) / 100;
-  const targetLeft = (canvasW * spec.leftPercent) / 100;
-  const targetTop = (canvasH * spec.topPercent) / 100;
-
-  // 只以寬度決定縮放，高度隨原始比例等比跟著變
+async function layoutSmartByPercents(layer, canvasW, canvasH, spec, name) {
+  // 等比放進框內（見 fitInFrame），框外不會超出
   const src = boundsBox(layer);
-  const scale = targetW / src.width;
+  const aspectPercent = (src.height / src.width) * (canvasW / canvasH);
+  const rect = fitInFrame(name, spec, aspectPercent);
+  const scale = (canvasW * rect.width) / 100 / src.width;
   await scaleLayerUniform(layer, Math.max(scale, 0.01));
 
   const fitted = boundsBox(layer);
-  await translateLayer(layer, targetLeft - fitted.left, targetTop - fitted.top);
+  await translateLayer(
+    layer,
+    (canvasW * rect.left) / 100 - fitted.left,
+    (canvasH * rect.top) / 100 - fitted.top,
+  );
 }
 
 async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
   const layers = requireMcdSmartLayers(doc);
 
   if (variant.elements.$BG) {
-    await layoutSmartByPercents(layers.$BG, canvasW, canvasH, variant.elements.$BG);
+    await layoutSmartByPercents(
+      layers.$BG,
+      canvasW,
+      canvasH,
+      variant.elements.$BG,
+      "$BG",
+    );
   } else {
     await layoutObjectFitCover(layers.$BG, canvasW, canvasH);
   }
@@ -1636,6 +1715,7 @@ async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
       canvasW,
       canvasH,
       variant.elements[name],
+      name,
     );
   }
 }
@@ -2030,7 +2110,7 @@ function showDialog(dialog, title, options = {}) {
 
 const SETTING_STEP = 0.1;
 const MIN_WIDTH_PERCENT = 1;
-const RESIZE_CORNERS = ["nw", "ne", "sw", "se"];
+const RESIZE_CORNERS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const HANDLE_SIZE = 10;
 
 function roundPercent(value) {
@@ -2043,7 +2123,10 @@ function createResizeWorkspace(root) {
     leftPercent: el("field-leftPercent"),
     topPercent: el("field-topPercent"),
     widthPercent: el("field-widthPercent"),
+    heightPercent: el("field-heightPercent"),
   };
+  const alignXPicker = el("align-x");
+  const alignYPicker = el("align-y");
   const stage = el("preview-stage");
   const templatePicker = el("template-picker");
   const variantPicker = el("variant-picker");
@@ -2147,20 +2230,40 @@ function createResizeWorkspace(root) {
       const n = parseFloat(fields[key].value);
       out[key] = Number.isFinite(n) ? n : spec[key];
     }
+    const h = parseFloat(fields.heightPercent.value);
+    if (Number.isFinite(h) && h > 0) {
+      out.heightPercent = h;
+    }
+    if (alignXPicker.selectedIndex >= 0) {
+      out.alignX = ALIGN_X_KEYS[alignXPicker.selectedIndex];
+    }
+    if (alignYPicker.selectedIndex >= 0) {
+      out.alignY = ALIGN_Y_KEYS[alignYPicker.selectedIndex];
+    }
     return out;
   }
 
   function writeFields(spec) {
     for (const key of SPEC_KEYS) {
-      fields[key].value = spec[key];
+      fields[key].value = roundTo(spec[key], 2);
     }
+    fields.heightPercent.value = hasFrameHeight(spec)
+      ? roundTo(spec.heightPercent, 2)
+      : "";
   }
 
   function loadFields() {
     const spec = currentSpec();
-    for (const key of SPEC_KEYS) {
-      fields[key].value = spec ? spec[key] : "";
+    if (!spec) {
+      for (const key of FIELD_KEYS) {
+        fields[key].value = "";
+      }
+      return;
     }
+    writeFields(spec);
+    const align = resolveAlign(state.elementName, spec);
+    setPickerIndex(alignXPicker, ALIGN_X_KEYS.indexOf(align.alignX));
+    setPickerIndex(alignYPicker, ALIGN_Y_KEYS.indexOf(align.alignY));
   }
 
   function commitFields() {
@@ -2172,21 +2275,31 @@ function createResizeWorkspace(root) {
     if (state.elementName === "$BG" && !variant.elements.$BG) {
       // 沒動過就維持自動 cover，換母版時仍會鋪滿
       const cover = coverSpec();
-      const changed = SPEC_KEYS.some(
-        (key) => Math.abs(next[key] - cover[key]) > 0.005,
-      );
+      const changed =
+        hasFrameHeight(next) ||
+        SPEC_KEYS.some((key) => Math.abs(next[key] - cover[key]) > 0.005);
       if (changed) {
         variant.elements.$BG = next;
       }
       return;
     }
-    Object.assign(variant.elements[state.elementName], next);
+    const target = variant.elements[state.elementName];
+    delete target.heightPercent;
+    Object.assign(target, next);
+  }
+
+  function naturalHeightPercent(name, spec) {
+    return spec.widthPercent * heightRatio(name);
   }
 
   function stepField(key, direction) {
     const input = fields[key];
     const current = parseFloat(input.value);
-    const base = Number.isFinite(current) ? current : 0;
+    let base = Number.isFinite(current) ? current : 0;
+    if (key === "heightPercent" && !Number.isFinite(current)) {
+      // 不限高度時從圖層目前的高度開始調
+      base = naturalHeightPercent(state.elementName, readFieldsAsSpec());
+    }
     const next = Math.min(100, Math.max(0, base + direction * SETTING_STEP));
     input.value = roundTo(next, 2);
   }
@@ -2215,6 +2328,8 @@ function createResizeWorkspace(root) {
 
   function renderElementPicker() {
     fillPicker(elementPicker, EDITABLE_ELEMENT_NAMES);
+    fillPicker(alignXPicker, ["靠左", "置中", "靠右"]);
+    fillPicker(alignYPicker, ["靠上", "置中", "靠下"]);
     setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(state.elementName));
   }
 
@@ -2261,9 +2376,14 @@ function createResizeWorkspace(root) {
     if (!img) {
       return;
     }
-    img.style.left = `${spec.leftPercent}%`;
-    img.style.top = `${spec.topPercent}%`;
-    img.style.width = `${spec.widthPercent}%`;
+    const rect = fitInFrame(name, spec, heightRatio(name));
+    img.style.left = `${rect.left}%`;
+    img.style.top = `${rect.top}%`;
+    img.style.width = `${rect.width}%`;
+  }
+
+  function frameHeightPercent(name, spec) {
+    return hasFrameHeight(spec) ? spec.heightPercent : naturalHeightPercent(name, spec);
   }
 
   function updateSelectionBox() {
@@ -2281,7 +2401,8 @@ function createResizeWorkspace(root) {
       return;
     }
     const spec = readFieldsAsSpec();
-    const heightPercent = spec.widthPercent * ratio;
+    const heightPercent = frameHeightPercent(state.elementName, spec);
+    sel.box.classList.toggle("is-limited", hasFrameHeight(spec));
     sel.box.style.left = `${spec.leftPercent}%`;
     sel.box.style.top = `${spec.topPercent}%`;
     sel.box.style.width = `${spec.widthPercent}%`;
@@ -2292,8 +2413,10 @@ function createResizeWorkspace(root) {
     const stageH = stage.clientHeight;
     const half = HANDLE_SIZE / 2;
     sel.handles.forEach(({ corner, node }) => {
-      const xPercent = spec.leftPercent + (corner.includes("e") ? spec.widthPercent : 0);
-      const yPercent = spec.topPercent + (corner.includes("s") ? heightPercent : 0);
+      const fx = corner.includes("e") ? 1 : corner.includes("w") ? 0 : 0.5;
+      const fy = corner.includes("s") ? 1 : corner.includes("n") ? 0 : 0.5;
+      const xPercent = spec.leftPercent + spec.widthPercent * fx;
+      const yPercent = spec.topPercent + heightPercent * fy;
       const x = clampNumber((xPercent / 100) * stageW, half, stageW - half);
       const y = clampNumber((yPercent / 100) * stageH, half, stageH - half);
       node.style.left = `${x - half}px`;
@@ -2413,7 +2536,7 @@ function createResizeWorkspace(root) {
       startX: event.clientX,
       startY: event.clientY,
       start: spec,
-      ratio: heightRatio(state.elementName),
+      startHeight: frameHeightPercent(state.elementName, spec),
       stageW: Math.max(stage.clientWidth, 1),
       stageH: Math.max(stage.clientHeight, 1),
     };
@@ -2431,31 +2554,44 @@ function createResizeWorkspace(root) {
   }
 
   /**
-   * 角落縮放：對角固定不動，寬高等比（高度由圖層比例決定）。
-   * 以水平或垂直拖曳量中變化較大者決定新寬度，拖斜線時比較順手。
+   * 框的縮放（對邊／對角固定不動）：
+   *   四個角：框等比縮放；不限高度時高度維持「不限」，圖層照舊以寬度等比放大縮小
+   *   上下邊：只改框高（會設定高度%）
+   *   左右邊：只改框寬
+   * 角落以水平或垂直拖曳量中變化較大者為準，拖斜線時比較順手。
    */
   function resizeSpecFromDrag(drag, dxPercent, dyPercent) {
-    const { start, ratio } = drag;
-    const sx = drag.corner.includes("e") ? 1 : -1;
-    const sy = drag.corner.includes("s") ? 1 : -1;
-    const startHeight = start.widthPercent * ratio;
+    const { start, startHeight, corner } = drag;
+    const sx = corner.includes("e") ? 1 : corner.includes("w") ? -1 : 0;
+    const sy = corner.includes("s") ? 1 : corner.includes("n") ? -1 : 0;
+    let width = start.widthPercent;
+    let height = startHeight;
 
-    const widthFromX = start.widthPercent + sx * dxPercent;
-    const widthFromY = ratio
-      ? (startHeight + sy * dyPercent) / ratio
-      : widthFromX;
-    const useX =
-      Math.abs(widthFromX - start.widthPercent) >=
-      Math.abs(widthFromY - start.widthPercent);
-    const width = Math.max(MIN_WIDTH_PERCENT, useX ? widthFromX : widthFromY);
-    const height = width * ratio;
+    if (sx && sy) {
+      const ratio = startHeight / Math.max(start.widthPercent, 0.01);
+      const widthFromX = start.widthPercent + sx * dxPercent;
+      const widthFromY = ratio ? (startHeight + sy * dyPercent) / ratio : widthFromX;
+      const useX =
+        Math.abs(widthFromX - start.widthPercent) >=
+        Math.abs(widthFromY - start.widthPercent);
+      width = Math.max(MIN_WIDTH_PERCENT, useX ? widthFromX : widthFromY);
+      height = width * ratio;
+    } else if (sx) {
+      width = Math.max(MIN_WIDTH_PERCENT, start.widthPercent + sx * dxPercent);
+    } else {
+      height = Math.max(MIN_WIDTH_PERCENT, startHeight + sy * dyPercent);
+    }
 
-    return {
-      leftPercent:
-        sx > 0 ? start.leftPercent : start.leftPercent + (start.widthPercent - width),
-      topPercent: sy > 0 ? start.topPercent : start.topPercent + (startHeight - height),
+    const next = {
+      ...start,
+      leftPercent: sx < 0 ? start.leftPercent + (start.widthPercent - width) : start.leftPercent,
+      topPercent: sy < 0 ? start.topPercent + (startHeight - height) : start.topPercent,
       widthPercent: width,
     };
+    if (hasFrameHeight(start) || (sy && !sx)) {
+      next.heightPercent = height;
+    }
+    return next;
   }
 
   function onMouseMove(event) {
@@ -2470,10 +2606,7 @@ function createResizeWorkspace(root) {
       fields.leftPercent.value = roundPercent(drag.start.leftPercent + dxPercent);
       fields.topPercent.value = roundPercent(drag.start.topPercent + dyPercent);
     } else {
-      const spec = resizeSpecFromDrag(drag, dxPercent, dyPercent);
-      for (const key of SPEC_KEYS) {
-        fields[key].value = roundTo(spec[key], 2);
-      }
+      writeFields(resizeSpecFromDrag(drag, dxPercent, dyPercent));
     }
     updatePreviewFromFields();
   }
@@ -2507,6 +2640,30 @@ function createResizeWorkspace(root) {
     }
   }
 
+  // 把目前版型各圖層的框高鎖定成目前母版圖層的實際高度（之後換 PSD 也不會超出）
+  async function lockFrameHeights() {
+    const variant = currentVariant();
+    if (!variant || !state.previewCache) {
+      setStatus("請先擷取預覽圖層。");
+      return;
+    }
+    commitFields();
+    let count = 0;
+    for (const name of MCD_POSITION_ELEMENT_NAMES) {
+      const spec = variant.elements[name];
+      if (!hasFrameHeight(spec)) {
+        spec.heightPercent = roundTo(naturalHeightPercent(name, spec), 2);
+        count += 1;
+      }
+    }
+    loadFields();
+    renderPreview();
+    await persist(
+      `已鎖定「${variantLabel(variant)}」${count} 個圖層的框高`,
+      "已鎖定框高",
+    );
+  }
+
   // ----- 模組（template）-----
 
   function selectTemplate(index) {
@@ -2516,14 +2673,26 @@ function createResizeWorkspace(root) {
     clampSelection();
 
     // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
-    const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
-    if (sourceDoc && validMasterOrNull(sourceDoc)) {
+    const template = currentTemplate();
+    const sourceDoc = findOpenDocumentForTemplate(template);
+    const switchDoc =
+      sourceDoc && validMasterOrNull(sourceDoc) && sourceDoc !== state.master;
+    if (switchDoc) {
       state.master = sourceDoc;
     }
 
     renderVariantPicker();
     loadFields();
     refreshPreview(false);
+
+    if (switchDoc) {
+      // Photoshop 也切到該模組的來源 PSD；隨後的 select 通知因母版相同會略過
+      activateDocument(sourceDoc).catch((error) => {
+        setStatus(`無法切換到 ${sourceDoc.name}：${error.message || error}`);
+      });
+    } else if (template && template.source && !sourceDoc) {
+      setStatus(`模組來源 ${template.source.fileName} 未開啟，預覽仍使用 ${state.master ? state.master.name : "目前文件"}。`);
+    }
   }
 
   async function uploadPsd() {
@@ -2584,8 +2753,8 @@ function createResizeWorkspace(root) {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
       },
-      // 新模組先帶入內建三個樣板與其預設值
-      values: deepClone(BUILTIN_RESIZE_VALUES),
+      // 新模組複製「預設」模組目前的樣板（含鎖定的框高與對齊），沒有才用內建值
+      values: deepClone(builtinTemplateValues()),
     });
     state.templateIndex = moduleStore.templates.length - 1;
     state.variantIndex = 0;
@@ -2638,12 +2807,22 @@ function createResizeWorkspace(root) {
     await persist(`已新增樣板「${name}」`, "成功新增樣板");
   }
 
-  function defaultElementsFor(variant) {
-    // 與內建樣板同名就還原成內建數值，其餘還原成置中預設值
-    const builtin = BUILTIN_RESIZE_VALUES.variants.find((item) =>
-      isSameVariantName(item.outputDocument, variant.outputDocument || ""),
-    );
-    return deepClone(builtin ? builtin.elements : DEFAULT_VARIANT_ELEMENTS);
+  function defaultElementsFor(template, variant) {
+    // 其他模組以「預設」模組的同名樣板為準；「預設」模組本身還原成程式內建值；都沒有就用置中預設值
+    const sources = template.builtin
+      ? [BUILTIN_RESIZE_VALUES]
+      : [builtinTemplateValues(), BUILTIN_RESIZE_VALUES];
+    for (const values of sources) {
+      const match = values.variants.find((item) =>
+        isSameVariantName(item.outputDocument, variant.outputDocument || ""),
+      );
+      if (match) {
+        const elements = deepClone(match.elements);
+        delete elements.$BG;
+        return elements;
+      }
+    }
+    return deepClone(DEFAULT_VARIANT_ELEMENTS);
   }
 
   async function resetVariant() {
@@ -2658,7 +2837,7 @@ function createResizeWorkspace(root) {
       return;
     }
     // $BG 不在預設值內，還原後回到自動 cover
-    variant.elements = defaultElementsFor(variant);
+    variant.elements = defaultElementsFor(template, variant);
     loadFields();
     renderPreview();
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
@@ -2833,7 +3012,7 @@ function createResizeWorkspace(root) {
     });
   });
 
-  for (const key of SPEC_KEYS) {
+  for (const key of FIELD_KEYS) {
     fields[key].addEventListener("input", updatePreviewFromFields);
   }
 
@@ -2866,6 +3045,10 @@ function createResizeWorkspace(root) {
   el("btn-add-variant").addEventListener("click", addVariant);
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
+  el("btn-lock-heights").addEventListener("click", lockFrameHeights);
+  [alignXPicker, alignYPicker].forEach((picker) => {
+    picker.addEventListener("change", updatePreviewFromFields);
+  });
 
   el("btn-manage-variants").addEventListener("click", openVariantManager);
   el("btn-manager-save").addEventListener("click", saveVariantManager);
