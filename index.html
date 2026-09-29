@@ -421,6 +421,12 @@
 
         <!-- ===== Resize 分頁 ===== -->
         <div data-workspace="resize">
+          <div class="picker-title-row">
+            <span class="picker-title">選擇模組</span>
+            <button type="button" class="small-btn" data-role="btn-manage-templates">
+              編輯
+            </button>
+          </div>
           <div class="module-row">
             <sp-picker data-role="template-picker" size="m" label="PSD 模組">
               <sp-menu slot="options"></sp-menu>
@@ -506,10 +512,10 @@
                 </div>
                 <div data-role="variant-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-manager-close" variant="secondary"
+                  <sp-button data-role="variant-manager-close" variant="secondary"
                     >關閉</sp-button
                   >
-                  <sp-button data-role="btn-manager-save" variant="cta"
+                  <sp-button data-role="variant-manager-save" variant="cta"
                     >儲存</sp-button
                   >
                 </div>
@@ -517,10 +523,41 @@
               <div data-role="variant-manager-confirm-view" style="display: none">
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-delete-cancel" variant="secondary"
+                  <sp-button data-role="variant-manager-delete-cancel" variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="btn-delete-confirm" variant="cta"
+                  <sp-button data-role="variant-manager-delete-confirm" variant="cta"
+                    >確認</sp-button
+                  >
+                </div>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="template-manager">
+            <div class="dialog-body manager-body">
+              <div data-role="template-manager-list-view">
+                <div class="manager-row manager-head">
+                  <span>勾選</span>
+                  <span class="manager-name">模組名稱</span>
+                </div>
+                <div data-role="template-manager-list"></div>
+                <div class="manager-actions">
+                  <sp-button data-role="template-manager-close" variant="secondary"
+                    >關閉</sp-button
+                  >
+                  <sp-button data-role="template-manager-save" variant="cta"
+                    >儲存</sp-button
+                  >
+                </div>
+              </div>
+              <div data-role="template-manager-confirm-view" style="display: none">
+                <p class="dialog-text">請問確認刪除這個模組嗎？</p>
+                <div class="manager-actions">
+                  <sp-button data-role="template-manager-delete-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="template-manager-delete-confirm" variant="cta"
                     >確認</sp-button
                   >
                 </div>
@@ -597,6 +634,12 @@
 
         <!-- ===== 套圖（目前與 Resize 相同，之後再調整） 分頁 ===== -->
         <div data-workspace="apply" style="display: none">
+          <div class="picker-title-row">
+            <span class="picker-title">選擇模組</span>
+            <button type="button" class="small-btn" data-role="btn-manage-templates">
+              編輯
+            </button>
+          </div>
           <div class="module-row">
             <sp-picker data-role="template-picker" size="m" label="PSD 模組">
               <sp-menu slot="options"></sp-menu>
@@ -682,10 +725,10 @@
                 </div>
                 <div data-role="variant-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-manager-close" variant="secondary"
+                  <sp-button data-role="variant-manager-close" variant="secondary"
                     >關閉</sp-button
                   >
-                  <sp-button data-role="btn-manager-save" variant="cta"
+                  <sp-button data-role="variant-manager-save" variant="cta"
                     >儲存</sp-button
                   >
                 </div>
@@ -693,10 +736,41 @@
               <div data-role="variant-manager-confirm-view" style="display: none">
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-delete-cancel" variant="secondary"
+                  <sp-button data-role="variant-manager-delete-cancel" variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="btn-delete-confirm" variant="cta"
+                  <sp-button data-role="variant-manager-delete-confirm" variant="cta"
+                    >確認</sp-button
+                  >
+                </div>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="template-manager">
+            <div class="dialog-body manager-body">
+              <div data-role="template-manager-list-view">
+                <div class="manager-row manager-head">
+                  <span>勾選</span>
+                  <span class="manager-name">模組名稱</span>
+                </div>
+                <div data-role="template-manager-list"></div>
+                <div class="manager-actions">
+                  <sp-button data-role="template-manager-close" variant="secondary"
+                    >關閉</sp-button
+                  >
+                  <sp-button data-role="template-manager-save" variant="cta"
+                    >儲存</sp-button
+                  >
+                </div>
+              </div>
+              <div data-role="template-manager-confirm-view" style="display: none">
+                <p class="dialog-text">請問確認刪除這個模組嗎？</p>
+                <div class="manager-actions">
+                  <sp-button data-role="template-manager-delete-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="template-manager-delete-confirm" variant="cta"
                     >確認</sp-button
                   >
                 </div>
