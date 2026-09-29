@@ -121,7 +121,8 @@
         width: 100%;
         margin-top: 10px;
         overflow: hidden;
-        background: #222;
+        /* 產出的新文件以白色填滿，預覽底色一致，半透明的 $BG 才不會看起來變暗 */
+        background: white;
         border: 1px solid #555;
         box-sizing: border-box;
       }
@@ -154,6 +155,7 @@
 
       .preview-handle {
         position: absolute;
+        display: none;
         width: 10px;
         height: 10px;
         box-sizing: border-box;
@@ -162,28 +164,14 @@
         pointer-events: auto;
       }
 
-      .preview-handle.is-nw {
-        left: -6px;
-        top: -6px;
-        cursor: nwse-resize;
-      }
-
-      .preview-handle.is-ne {
-        right: -6px;
-        top: -6px;
-        cursor: nesw-resize;
-      }
-
-      .preview-handle.is-sw {
-        left: -6px;
-        bottom: -6px;
-        cursor: nesw-resize;
-      }
-
+      .preview-handle.is-nw,
       .preview-handle.is-se {
-        right: -6px;
-        bottom: -6px;
         cursor: nwse-resize;
+      }
+
+      .preview-handle.is-ne,
+      .preview-handle.is-sw {
+        cursor: nesw-resize;
       }
 
       .tab-bar {
@@ -238,6 +226,10 @@
         border-radius: 3px;
         padding: 3px 6px;
         font-size: 12px;
+      }
+
+      .text-input.is-suggested {
+        border-color: #0d66d0;
       }
 
       .text-input.is-invalid {
