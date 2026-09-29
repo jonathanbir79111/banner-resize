@@ -2516,14 +2516,26 @@ function createResizeWorkspace(root) {
     clampSelection();
 
     // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
-    const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
-    if (sourceDoc && validMasterOrNull(sourceDoc)) {
+    const template = currentTemplate();
+    const sourceDoc = findOpenDocumentForTemplate(template);
+    const switchDoc =
+      sourceDoc && validMasterOrNull(sourceDoc) && sourceDoc !== state.master;
+    if (switchDoc) {
       state.master = sourceDoc;
     }
 
     renderVariantPicker();
     loadFields();
     refreshPreview(false);
+
+    if (switchDoc) {
+      // Photoshop 也切到該模組的來源 PSD；隨後的 select 通知因母版相同會略過
+      activateDocument(sourceDoc).catch((error) => {
+        setStatus(`無法切換到 ${sourceDoc.name}：${error.message || error}`);
+      });
+    } else if (template && template.source && !sourceDoc) {
+      setStatus(`模組來源 ${template.source.fileName} 未開啟，預覽仍使用 ${state.master ? state.master.name : "目前文件"}。`);
+    }
   }
 
   async function uploadPsd() {
