@@ -1372,6 +1372,18 @@ function fitInFrame(name, spec, aspectPercent) {
   };
 }
 
+// 圖層前後順序（由下往上，不含固定在最底的 $BG）；需剛好是五個元件各一次，否則視為未設定
+function normalizeLayerOrder(raw) {
+  if (!Array.isArray(raw) || raw.length !== MCD_POSITION_ELEMENT_NAMES.length) {
+    return null;
+  }
+  const names = new Set(raw);
+  const valid =
+    names.size === raw.length &&
+    MCD_POSITION_ELEMENT_NAMES.every((name) => names.has(name));
+  return valid ? raw.slice() : null;
+}
+
 function normalizeTemplate(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -1384,10 +1396,17 @@ function normalizeTemplate(raw) {
     values: {
       width: parsePositiveInt(values.width) || BUILTIN_RESIZE_VALUES.width,
       height: parsePositiveInt(values.height) || BUILTIN_RESIZE_VALUES.height,
-      variants: variants.map((variant) => ({
-        outputDocument: String((variant && variant.outputDocument) || "").trim(),
-        elements: normalizeElements(variant && variant.elements),
-      })),
+      variants: variants.map((variant) => {
+        const out = {
+          outputDocument: String((variant && variant.outputDocument) || "").trim(),
+          elements: normalizeElements(variant && variant.elements),
+        };
+        const order = normalizeLayerOrder(variant && variant.order);
+        if (order) {
+          out.order = order;
+        }
+        return out;
+      }),
     },
   };
 }
@@ -1656,6 +1675,7 @@ async function createMcdDocumentFromMaster(
   name,
   width,
   height,
+  layerOrder,
 ) {
   const newDoc = await app.createDocument({
     width,
@@ -1666,10 +1686,10 @@ async function createMcdDocumentFromMaster(
     name,
   });
 
-  const bottomToTop = listMcdLayersBottomToTop(
-    getMcdSourceContainer(master),
-    sourceLayers,
-  );
+  // 後複製的圖層會疊在上面：有指定層級就照「$BG + 樣板順序」由下往上複製，否則沿用母版順序
+  const bottomToTop = layerOrder
+    ? ["$BG", ...layerOrder].map((layerName) => sourceLayers[layerName])
+    : listMcdLayersBottomToTop(getMcdSourceContainer(master), sourceLayers);
   for (const layer of bottomToTop) {
     await master.duplicateLayers([layer], newDoc);
   }
@@ -1907,6 +1927,7 @@ async function generateResizeDocuments(master, values) {
             docName,
             canvasW,
             canvasH,
+            job.variant.order,
           );
           await applyResizeVariantLayout(newDoc, job.variant, canvasW, canvasH);
           await saveDocumentAsPsd(newDoc, job.file);
@@ -2513,6 +2534,7 @@ function createResizeWorkspace(root) {
 
   function updateHighlight() {
     updateSelectionBox();
+    updateLayerButtons();
   }
 
   function resizeStage() {
@@ -2538,6 +2560,73 @@ function createResizeWorkspace(root) {
     return { box, handles };
   }
 
+  // ----- 圖層前後順序 -----
+
+  function effectiveLayerOrder() {
+    const variant = currentVariant();
+    if (variant && variant.order) {
+      return variant.order;
+    }
+    // 未設定時沿用母版的堆疊順序
+    const fromMaster = state.previewCache
+      ? state.previewCache.order.filter((name) => name !== "$BG")
+      : [];
+    return fromMaster.length === MCD_POSITION_ELEMENT_NAMES.length
+      ? fromMaster
+      : MCD_POSITION_ELEMENT_NAMES.slice();
+  }
+
+  function zIndexFor(name, fallbackIndex) {
+    if (name === "$BG") {
+      return 1;
+    }
+    const index = effectiveLayerOrder().indexOf(name);
+    return index >= 0 ? index + 2 : fallbackIndex + 1;
+  }
+
+  function applyLayerOrder() {
+    Object.keys(state.images).forEach((name) => {
+      state.images[name].style.zIndex = String(zIndexFor(name, 0));
+    });
+  }
+
+  const LAYER_MOVES = {
+    front: (order, i) => [...order.slice(0, i), ...order.slice(i + 1), order[i]],
+    back: (order, i) => [order[i], ...order.slice(0, i), ...order.slice(i + 1)],
+    forward: (order, i) => swapAt(order, i, i + 1),
+    backward: (order, i) => swapAt(order, i, i - 1),
+  };
+
+  function swapAt(order, i, j) {
+    if (j < 0 || j >= order.length) {
+      return order;
+    }
+    const next = order.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    return next;
+  }
+
+  function moveLayer(direction) {
+    const variant = currentVariant();
+    const name = state.elementName;
+    if (!variant || name === "$BG") {
+      setStatus("$BG 固定在最底層。");
+      return;
+    }
+    const order = effectiveLayerOrder();
+    const next = LAYER_MOVES[direction](order, order.indexOf(name));
+    variant.order = next;
+    applyLayerOrder();
+    const position = next.length - next.indexOf(name);
+    setStatus(`${name} 目前在第 ${position} 層（由上往下數），按「儲存設定值」保存。`);
+  }
+
+  function updateLayerButtons() {
+    root.querySelectorAll("[data-layer-move]").forEach((button) => {
+      button.disabled = state.elementName === "$BG";
+    });
+  }
+
   function renderPreview() {
     stage.innerHTML = "";
     state.images = {};
@@ -2551,7 +2640,7 @@ function createResizeWorkspace(root) {
       const img = document.createElement("img");
       img.className = "preview-layer";
       img.src = cache.images[name].dataUrl;
-      img.style.zIndex = String(index + 1);
+      img.style.zIndex = String(zIndexFor(name, index));
       stage.appendChild(img);
       state.images[name] = img;
       img.classList.add("is-draggable");
@@ -2915,6 +3004,7 @@ function createResizeWorkspace(root) {
     }
     // $BG 不在預設值內，還原後回到自動 cover
     variant.elements = defaultElementsFor(template, variant);
+    delete variant.order;
     loadFields();
     renderPreview();
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
@@ -3188,6 +3278,9 @@ function createResizeWorkspace(root) {
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-lock-heights").addEventListener("click", lockFrameHeights);
+  root.querySelectorAll("[data-layer-move]").forEach((button) => {
+    button.addEventListener("click", () => moveLayer(button.getAttribute("data-layer-move")));
+  });
   [alignXPicker, alignYPicker].forEach((picker) => {
     picker.addEventListener("change", updatePreviewFromFields);
   });
