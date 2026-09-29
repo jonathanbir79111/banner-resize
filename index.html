@@ -514,6 +514,9 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
+                <button type="button" class="small-btn" data-role="btn-sync-sizes">
+                  同步圖層大小
+                </button>
               </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
@@ -528,6 +531,20 @@
             <button type="button" data-role="btn-reset-defaults">還原預設值</button>
             <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
           </div>
+
+          <dialog data-role="sync-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text">請問要同步全部的圖層大小嗎?</p>
+              <div class="manager-actions">
+                <sp-button data-role="btn-sync-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-sync-confirm" variant="cta"
+                  >確定</sp-button
+                >
+              </div>
+            </div>
+          </dialog>
 
           <dialog data-role="reset-dialog">
             <div class="dialog-body">
@@ -736,6 +753,9 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
+                <button type="button" class="small-btn" data-role="btn-sync-sizes">
+                  同步圖層大小
+                </button>
               </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
@@ -750,6 +770,20 @@
             <button type="button" data-role="btn-reset-defaults">還原預設值</button>
             <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
           </div>
+
+          <dialog data-role="sync-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text">請問要同步全部的圖層大小嗎?</p>
+              <div class="manager-actions">
+                <sp-button data-role="btn-sync-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-sync-confirm" variant="cta"
+                  >確定</sp-button
+                >
+              </div>
+            </div>
+          </dialog>
 
           <dialog data-role="reset-dialog">
             <div class="dialog-body">
