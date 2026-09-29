@@ -1810,17 +1810,34 @@ function validMasterOrNull(doc) {
   }
 }
 
+// ---------- Photoshop modal 佇列 ----------
+//
+// executeAsModal 同一時間只能有一個；切換文件、擷取預覽、產圖若同時發生，
+// 後到的會失敗（預覽空白、preview-temp 沒被關掉）。所有 modal 工作一律排隊依序執行。
+let photoshopBusy = 0;
+let modalQueue = Promise.resolve();
+
+function runModal(task, commandName) {
+  photoshopBusy += 1;
+  const run = () => core.executeAsModal(task, { commandName });
+  const result = modalQueue.then(run, run);
+  modalQueue = result.catch(() => {});
+  return result.finally(() => {
+    photoshopBusy -= 1;
+  });
+}
+
 // 切換作用中文件會觸發 select 事件，必須在 modal 範圍內執行
 async function activateDocument(doc) {
-  if (!doc || (app.activeDocument && app.activeDocument.id === doc.id)) {
+  if (!doc) {
     return;
   }
-  await core.executeAsModal(
-    async () => {
+  await runModal(async () => {
+    // 排隊期間作用中文件可能已變，實際執行時再判斷一次
+    if (isDocumentOpen(doc) && (!app.activeDocument || app.activeDocument.id !== doc.id)) {
       app.activeDocument = doc;
-    },
-    { commandName: "切換文件" },
-  );
+    }
+  }, "切換文件");
 }
 
 async function openPsdAsMaster(file) {
@@ -1830,12 +1847,9 @@ async function openPsdAsMaster(file) {
     return opened;
   }
   let doc = null;
-  await core.executeAsModal(
-    async () => {
-      doc = await app.open(file);
-    },
-    { commandName: "開啟 PSD 母版" },
-  );
+  await runModal(async () => {
+    doc = await app.open(file);
+  }, "開啟 PSD 母版");
   return doc || app.activeDocument;
 }
 
@@ -1875,7 +1889,7 @@ async function generateResizeDocuments(master, values) {
   for (const job of jobs) {
     const docName = stripExtension(job.fileName);
     try {
-      await core.executeAsModal(
+      await runModal(
         async () => {
           app.activeDocument = master;
           const newDoc = await createMcdDocumentFromMaster(
@@ -1888,7 +1902,7 @@ async function generateResizeDocuments(master, values) {
           await applyResizeVariantLayout(newDoc, job.variant, canvasW, canvasH);
           await saveDocumentAsPsd(newDoc, job.file);
         },
-        { commandName: `產製 ${docName}` },
+        `產製 ${docName}`,
       );
     } catch (error) {
       errors.push(`${job.fileName}：${error.message || error}`);
@@ -1935,7 +1949,7 @@ async function exportLayerPreviewPng(master, layer, file, name) {
     resolution: 72,
     mode: constants.NewDocumentMode.RGB,
     fill: constants.DocumentFill.TRANSPARENT,
-    name: "preview-temp",
+    name: PREVIEW_TEMP_NAME,
   });
 
   try {
@@ -1983,6 +1997,21 @@ async function exportLayerPreviewPng(master, layer, file, name) {
   }
 }
 
+const PREVIEW_TEMP_NAME = "preview-temp";
+
+// 之前被中斷而殘留的暫存文件一併關掉
+function closeLeftoverPreviewDocuments() {
+  const leftovers = [];
+  for (let i = 0; i < app.documents.length; i++) {
+    if (String(app.documents[i].name).startsWith(PREVIEW_TEMP_NAME)) {
+      leftovers.push(app.documents[i]);
+    }
+  }
+  return Promise.all(
+    leftovers.map((doc) => doc.closeWithoutSaving().catch(() => {})),
+  );
+}
+
 async function buildPreviewCache(master) {
   const sourceContainer = getMcdSourceContainer(master);
   const sourceLayers = requireMcdSmartLayers(sourceContainer);
@@ -1994,8 +2023,9 @@ async function buildPreviewCache(master) {
   const tempFolder = await localFileSystem.getTemporaryFolder();
   const images = {};
 
-  await core.executeAsModal(
+  await runModal(
     async () => {
+      await closeLeftoverPreviewDocuments();
       for (const name of MCD_SMART_LAYER_NAMES) {
         // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
         const file = await tempFolder.createFile(
@@ -2016,15 +2046,13 @@ async function buildPreviewCache(master) {
       }
       app.activeDocument = master;
     },
-    { commandName: "擷取預覽圖層" },
+    "擷取預覽圖層",
   );
 
   return { masterId: master.id, order, images };
 }
 
 // 外掛自己建立暫存文件、切換文件時（擷取預覽、產圖）不跟隨作用中文件
-let photoshopBusy = 0;
-
 async function whilePhotoshopBusy(task) {
   photoshopBusy += 1;
   try {
