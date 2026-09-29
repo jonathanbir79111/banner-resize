@@ -2232,7 +2232,7 @@ function createResizeWorkspace(root) {
     selection: null,
   };
 
-  const workspace = { root, open, show };
+  const workspace = { root, open, show, commit: commitFields };
 
   // ----- 目前選取 -----
 
@@ -3329,6 +3329,107 @@ function updateModuleFolderLabel() {
 }
 
 onModuleStoreChanged(updateModuleFolderLabel);
+
+// ---------- module.json 編輯視窗 ----------
+
+/**
+ * 驗證使用者改寫的 JSON：需為 { "templates": [...] }，每個模組要有不重複的名稱。
+ * 數值欄位經 normalizeTemplate 補齊，錯誤時丟出可讀的訊息。
+ */
+function parseModuleJsonText(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`JSON 格式錯誤：${error.message}`);
+  }
+  if (!data || !Array.isArray(data.templates)) {
+    throw new Error("最外層需為 { \"templates\": [ ... ] }");
+  }
+  const names = new Set();
+  return data.templates.map((raw, index) => {
+    const template = normalizeTemplate(raw);
+    if (!template || !template.name) {
+      throw new Error(`第 ${index + 1} 個模組缺少 name`);
+    }
+    if (names.has(template.name)) {
+      throw new Error(`模組名稱重複：${template.name}`);
+    }
+    names.add(template.name);
+    return template;
+  });
+}
+
+const jsonEditor = {
+  dialog: document.getElementById("json-editor-dialog"),
+  text: document.getElementById("json-editor-text"),
+  error: document.getElementById("json-editor-error"),
+  editView: document.getElementById("json-editor-edit-view"),
+  confirmView: document.getElementById("json-editor-confirm-view"),
+  pending: null,
+};
+
+function showJsonEditorView(confirm) {
+  jsonEditor.editView.style.display = confirm ? "none" : "block";
+  jsonEditor.confirmView.style.display = confirm ? "block" : "none";
+}
+
+async function openJsonEditor() {
+  await ensureModuleStore();
+  // 面板上尚未寫回的欄位先寫進資料，編輯視窗才會看到最新數值
+  Object.keys(workspaces).forEach((key) => workspaces[key].commit());
+  jsonEditor.text.value = JSON.stringify({ templates: moduleStore.templates }, null, 2);
+  jsonEditor.error.textContent = "";
+  jsonEditor.pending = null;
+  showJsonEditorView(false);
+  showDialog(jsonEditor.dialog, "編輯 module.json", {
+    resize: "both",
+    size: { width: 640, height: 540 },
+  });
+}
+
+document.getElementById("btn-edit-module-json").addEventListener("click", openJsonEditor);
+
+document.getElementById("btn-json-cancel").addEventListener("click", () => {
+  jsonEditor.dialog.close("cancel");
+});
+
+document.getElementById("btn-json-save").addEventListener("click", () => {
+  try {
+    jsonEditor.pending = parseModuleJsonText(jsonEditor.text.value);
+  } catch (error) {
+    jsonEditor.error.textContent = error.message || String(error);
+    return;
+  }
+  jsonEditor.error.textContent = "";
+  showJsonEditorView(true);
+});
+
+document.getElementById("btn-json-confirm-cancel").addEventListener("click", () => {
+  jsonEditor.pending = null;
+  showJsonEditorView(false);
+});
+
+document.getElementById("btn-json-confirm-ok").addEventListener("click", async () => {
+  const templates = jsonEditor.pending;
+  if (!templates) {
+    return;
+  }
+  const previous = moduleStore.templates;
+  moduleStore.templates = templates;
+  try {
+    await saveModuleStore();
+  } catch (error) {
+    moduleStore.templates = previous;
+    jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
+    showJsonEditorView(false);
+    return;
+  }
+  jsonEditor.pending = null;
+  jsonEditor.dialog.close("save");
+  notifyModuleStoreChanged(null);
+  await showToast("已儲存 module.json");
+});
 
 async function openResizeSettingsPanel() {
   await ensureModuleStore();
