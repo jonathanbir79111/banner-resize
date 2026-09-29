@@ -228,12 +228,20 @@
         font-size: 12px;
       }
 
+      /* 兩欄標題列同高，下拉選單才會對齊 */
       .picker-title-row {
         display: flex;
         flex-direction: row;
         align-items: center;
         justify-content: space-between;
         gap: 6px;
+        height: 24px;
+      }
+
+      .picker-title-row .small-btn {
+        height: 22px;
+        padding: 0 10px;
+        line-height: 20px;
       }
 
       .manager-row {
@@ -250,9 +258,40 @@
         font-size: 12px;
       }
 
+      /* 名稱欄吃掉剩餘寬度，編輯／刪除按鈕固定在右側不被擠出視窗 */
+      .manager-body {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+
       .manager-name {
-        flex: 1 1 auto;
-        min-width: 120px;
+        flex: 1 1 0;
+        min-width: 0;
+        width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .manager-row .small-btn,
+      .manager-row input[type="checkbox"] {
+        flex: 0 0 auto;
+      }
+
+      .manager-actions {
+        display: flex;
+        flex-direction: row;
+        gap: 8px;
+        width: 100%;
+        margin-top: 12px;
+      }
+
+      .manager-actions sp-button {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+        margin-top: 0;
       }
 
       .small-btn:disabled {
@@ -405,7 +444,9 @@
               </sp-picker>
             </div>
             <div class="picker-col">
-              <span class="picker-title">圖層</span>
+              <div class="picker-title-row">
+                <span class="picker-title">圖層</span>
+              </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
@@ -436,14 +477,14 @@
           </dialog>
 
           <dialog data-role="variant-manager">
-            <div class="dialog-body">
+            <div class="dialog-body manager-body">
               <div data-role="variant-manager-list-view">
                 <div class="manager-row manager-head">
                   <span>勾選</span>
                   <span class="manager-name">樣板名稱</span>
                 </div>
                 <div data-role="variant-manager-list"></div>
-                <div class="settings-row" style="margin-top: 12px">
+                <div class="manager-actions">
                   <sp-button data-role="btn-manager-close" variant="secondary"
                     >關閉</sp-button
                   >
@@ -454,7 +495,7 @@
               </div>
               <div data-role="variant-manager-confirm-view" style="display: none">
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
-                <div class="settings-row">
+                <div class="manager-actions">
                   <sp-button data-role="btn-delete-cancel" variant="secondary"
                     >取消</sp-button
                   >
@@ -556,7 +597,9 @@
               </sp-picker>
             </div>
             <div class="picker-col">
-              <span class="picker-title">圖層</span>
+              <div class="picker-title-row">
+                <span class="picker-title">圖層</span>
+              </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
@@ -587,14 +630,14 @@
           </dialog>
 
           <dialog data-role="variant-manager">
-            <div class="dialog-body">
+            <div class="dialog-body manager-body">
               <div data-role="variant-manager-list-view">
                 <div class="manager-row manager-head">
                   <span>勾選</span>
                   <span class="manager-name">樣板名稱</span>
                 </div>
                 <div data-role="variant-manager-list"></div>
-                <div class="settings-row" style="margin-top: 12px">
+                <div class="manager-actions">
                   <sp-button data-role="btn-manager-close" variant="secondary"
                     >關閉</sp-button
                   >
@@ -605,7 +648,7 @@
               </div>
               <div data-role="variant-manager-confirm-view" style="display: none">
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
-                <div class="settings-row">
+                <div class="manager-actions">
                   <sp-button data-role="btn-delete-cancel" variant="secondary"
                     >取消</sp-button
                   >

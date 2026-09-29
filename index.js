@@ -1670,6 +1670,23 @@ function readDocumentPath(doc) {
   }
 }
 
+function findOpenDocumentForTemplate(template) {
+  const source = template && template.source;
+  if (!source) {
+    return null;
+  }
+  const byPath = findOpenDocumentByPath(source.path);
+  if (byPath) {
+    return byPath;
+  }
+  for (let i = 0; i < app.documents.length; i++) {
+    if (app.documents[i].name === source.fileName) {
+      return app.documents[i];
+    }
+  }
+  return null;
+}
+
 function findOpenDocumentByPath(path) {
   if (!path) {
     return null;
@@ -1913,6 +1930,18 @@ async function buildPreviewCache(master) {
   return { masterId: master.id, order, images };
 }
 
+// 外掛自己建立暫存文件、切換文件時（擷取預覽、產圖）不跟隨作用中文件
+let photoshopBusy = 0;
+
+async function whilePhotoshopBusy(task) {
+  photoshopBusy += 1;
+  try {
+    return await task();
+  } finally {
+    photoshopBusy -= 1;
+  }
+}
+
 // 兩個分頁共用同一份擷取結果，避免同一份母版重複匯出
 const previewCacheByMaster = new Map();
 
@@ -1920,7 +1949,7 @@ function getPreviewCache(master, force) {
   if (!force && previewCacheByMaster.has(master.id)) {
     return previewCacheByMaster.get(master.id);
   }
-  const pending = buildPreviewCache(master).catch((error) => {
+  const pending = whilePhotoshopBusy(() => buildPreviewCache(master)).catch((error) => {
     previewCacheByMaster.delete(master.id);
     throw error;
   });
@@ -1990,9 +2019,9 @@ async function showToast(message) {
   }
 }
 
-function showDialog(dialog, title) {
+function showDialog(dialog, title, options = {}) {
   const show = dialog.uxpShowModal
-    ? dialog.uxpShowModal({ title, resize: "none" })
+    ? dialog.uxpShowModal({ title, resize: "none", ...options })
     : dialog.showModal();
   return Promise.resolve(show).then((result) => result === "confirm");
 }
@@ -2033,7 +2062,7 @@ function createResizeWorkspace(root) {
     selection: null,
   };
 
-  const workspace = { root, open, show };
+  const workspace = { root, open, show, followDocument };
 
   // ----- 目前選取 -----
 
@@ -2487,10 +2516,7 @@ function createResizeWorkspace(root) {
     clampSelection();
 
     // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
-    const template = currentTemplate();
-    const sourceDoc = findOpenDocumentByPath(
-      template && template.source ? template.source.path : "",
-    );
+    const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
     if (sourceDoc && validMasterOrNull(sourceDoc)) {
       state.master = sourceDoc;
     }
@@ -2734,7 +2760,10 @@ function createResizeWorkspace(root) {
     manager.pendingDelete = null;
     renderManagerList();
     showManagerView(false);
-    showDialog(manager.dialog, "編輯 Resize 樣板");
+    showDialog(manager.dialog, "編輯 Resize 樣板", {
+      resize: "both",
+      size: { width: 460, height: 320 },
+    });
   }
 
   function afterVariantsChanged() {
@@ -2874,7 +2903,9 @@ function createResizeWorkspace(root) {
       return;
     }
     try {
-      await generateResizeDocuments(state.master, template.values);
+      await whilePhotoshopBusy(() =>
+        generateResizeDocuments(state.master, template.values),
+      );
       closeResizeSettingsPanel();
     } catch (error) {
       await app.showAlert(`Resize 產製失敗：${error.message || error}`);
@@ -2924,6 +2955,32 @@ function createResizeWorkspace(root) {
     setStatus(note || "");
     if (master && existing < 0) {
       suggestTemplate(master);
+    }
+  }
+
+  // Photoshop 切換到另一份母版時，面板跟著換預覽來源與對應的模組
+  function followDocument(doc) {
+    if (!doc || (state.master && state.master.id === doc.id)) {
+      return;
+    }
+    commitFields();
+    state.master = doc;
+    state.previewCache = null;
+    const existing = findTemplateIndexForDocument(doc);
+    if (existing >= 0) {
+      state.templateIndex = existing;
+      state.variantIndex = 0;
+    }
+    templateNameInput.value = "";
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
+    renderAll();
+    if (existing >= 0) {
+      setStatus(`預覽來源：${doc.name}`);
+    } else {
+      suggestTemplate(doc);
+    }
+    if (root.style.display !== "none") {
+      refreshPreview(false);
     }
   }
 
@@ -2997,17 +3054,44 @@ async function openResizeSettingsPanel() {
   document.getElementById("btn-resize-1200x629").style.display = "none";
   document.getElementById("resize-settings-panel").style.display = "block";
   selectTab(activeTab);
-
-  // 目前開啟的母版還沒有模組：提醒一次（同一份文件本次工作階段不重複提醒）
-  if (master && findTemplateIndexForDocument(master) < 0 && !remindedMasterIds.has(master.id)) {
-    remindedMasterIds.add(master.id);
-    await app.showAlert(
-      `${master.name} 尚未建立模組。\n已帶入模組名稱「${suggestTemplateName(master)}」，確認後按「新增」。`,
-    );
-  }
 }
 
-const remindedMasterIds = new Set();
+let activeDocumentSyncTimer = null;
+
+function syncWithActiveDocument() {
+  const panel = document.getElementById("resize-settings-panel");
+  if (photoshopBusy || panel.style.display === "none") {
+    return;
+  }
+  let active = null;
+  try {
+    active = app.activeDocument;
+  } catch (_error) {
+    return;
+  }
+  const master = validMasterOrNull(active);
+  if (!master) {
+    return;
+  }
+  Object.keys(workspaces).forEach((key) => {
+    workspaces[key].followDocument(master);
+  });
+}
+
+function scheduleActiveDocumentSync() {
+  // 連續事件（開檔、切換分頁）合併處理，並等 Photoshop 更新完作用中文件
+  clearTimeout(activeDocumentSyncTimer);
+  activeDocumentSyncTimer = setTimeout(syncWithActiveDocument, 150);
+}
+
+try {
+  action.addNotificationListener(
+    [{ event: "select" }, { event: "open" }, { event: "close" }],
+    scheduleActiveDocumentSync,
+  );
+} catch (_error) {
+  // 舊版 Photoshop 不支援通知，只在開啟面板時同步
+}
 
 function closeResizeSettingsPanel() {
   document.getElementById("resize-settings-panel").style.display = "none";
