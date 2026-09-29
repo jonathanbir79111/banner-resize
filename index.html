@@ -228,6 +228,38 @@
         font-size: 12px;
       }
 
+      .picker-title-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+
+      .manager-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+        font-size: 13px;
+      }
+
+      .manager-head {
+        color: #ccc;
+        font-size: 12px;
+      }
+
+      .manager-name {
+        flex: 1 1 auto;
+        min-width: 120px;
+      }
+
+      .small-btn:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
       .text-input.is-suggested {
         border-color: #0d66d0;
       }
@@ -362,7 +394,12 @@
 
           <div class="settings-row">
             <div class="picker-col">
-              <span class="picker-title">選擇Resize樣板</span>
+              <div class="picker-title-row">
+                <span class="picker-title">選擇Resize樣板</span>
+                <button type="button" class="small-btn" data-role="btn-manage-variants">
+                  編輯
+                </button>
+              </div>
               <sp-picker data-role="variant-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
@@ -398,6 +435,37 @@
             </div>
           </dialog>
 
+          <dialog data-role="variant-manager">
+            <div class="dialog-body">
+              <div data-role="variant-manager-list-view">
+                <div class="manager-row manager-head">
+                  <span>勾選</span>
+                  <span class="manager-name">樣板名稱</span>
+                </div>
+                <div data-role="variant-manager-list"></div>
+                <div class="settings-row" style="margin-top: 12px">
+                  <sp-button data-role="btn-manager-close" variant="secondary"
+                    >關閉</sp-button
+                  >
+                  <sp-button data-role="btn-manager-save" variant="cta"
+                    >儲存</sp-button
+                  >
+                </div>
+              </div>
+              <div data-role="variant-manager-confirm-view" style="display: none">
+                <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
+                <div class="settings-row">
+                  <sp-button data-role="btn-delete-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-delete-confirm" variant="cta"
+                    >確認</sp-button
+                  >
+                </div>
+              </div>
+            </div>
+          </dialog>
+
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
@@ -427,7 +495,9 @@
           </div>
 
           <div class="settings-actions" style="margin-top: 10px">
-            <sp-button data-role="btn-save-setting" variant="secondary">儲存</sp-button>
+            <sp-button data-role="btn-save-setting" variant="secondary"
+              >儲存設定值</sp-button
+            >
           </div>
 
           <div class="divider"></div>
@@ -475,7 +545,12 @@
 
           <div class="settings-row">
             <div class="picker-col">
-              <span class="picker-title">選擇Resize樣板</span>
+              <div class="picker-title-row">
+                <span class="picker-title">選擇Resize樣板</span>
+                <button type="button" class="small-btn" data-role="btn-manage-variants">
+                  編輯
+                </button>
+              </div>
               <sp-picker data-role="variant-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
               </sp-picker>
@@ -511,6 +586,37 @@
             </div>
           </dialog>
 
+          <dialog data-role="variant-manager">
+            <div class="dialog-body">
+              <div data-role="variant-manager-list-view">
+                <div class="manager-row manager-head">
+                  <span>勾選</span>
+                  <span class="manager-name">樣板名稱</span>
+                </div>
+                <div data-role="variant-manager-list"></div>
+                <div class="settings-row" style="margin-top: 12px">
+                  <sp-button data-role="btn-manager-close" variant="secondary"
+                    >關閉</sp-button
+                  >
+                  <sp-button data-role="btn-manager-save" variant="cta"
+                    >儲存</sp-button
+                  >
+                </div>
+              </div>
+              <div data-role="variant-manager-confirm-view" style="display: none">
+                <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
+                <div class="settings-row">
+                  <sp-button data-role="btn-delete-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-delete-confirm" variant="cta"
+                    >確認</sp-button
+                  >
+                </div>
+              </div>
+            </div>
+          </dialog>
+
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
@@ -540,7 +646,9 @@
           </div>
 
           <div class="settings-actions" style="margin-top: 10px">
-            <sp-button data-role="btn-save-setting" variant="secondary">儲存</sp-button>
+            <sp-button data-role="btn-save-setting" variant="secondary"
+              >儲存設定值</sp-button
+            >
           </div>
 
           <div class="divider"></div>
@@ -578,6 +686,11 @@
       >
       <div class="divider"></div> -->
     </div>
+    <dialog id="toast-dialog">
+      <div class="dialog-body">
+        <p id="toast-text" class="dialog-text" style="margin: 0"></p>
+      </div>
+    </dialog>
     <script src="index.js"></script>
   </body>
 </html>
