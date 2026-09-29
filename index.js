@@ -1123,6 +1123,8 @@ async function createBannerCanvasFromMaster(
 
 const MCD_SMART_LAYER_NAMES = ["$BG", "$PROD", "$HEAD", "$LOGO", "$SM", "$CTA"];
 const MCD_POSITION_ELEMENT_NAMES = ["$LOGO", "$HEAD", "$PROD", "$SM", "$CTA"];
+// 面板可選取的圖層；$BG 沒有設定值時自動 cover 鋪滿，拖拉或縮放後才記錄數值
+const EDITABLE_ELEMENT_NAMES = [...MCD_POSITION_ELEMENT_NAMES, "$BG"];
 const SPEC_KEYS = ["leftPercent", "topPercent", "widthPercent"];
 
 // 內建樣板：module.json 第一次建立時會以此當第 0 筆模組（builtin: true）。
@@ -1294,6 +1296,13 @@ function normalizeElements(raw) {
         : DEFAULT_VARIANT_ELEMENTS[name][key];
     }
   }
+  const bg = raw && raw.$BG;
+  if (bg && SPEC_KEYS.every((key) => Number.isFinite(Number(bg[key])))) {
+    out.$BG = {};
+    for (const key of SPEC_KEYS) {
+      out.$BG[key] = Number(bg[key]);
+    }
+  }
   return out;
 }
 
@@ -1303,9 +1312,14 @@ function normalizeTemplate(raw) {
   }
   const values = raw.values && typeof raw.values === "object" ? raw.values : {};
   const variants = Array.isArray(values.variants) ? values.variants : [];
+  const source = raw.source && typeof raw.source === "object" ? { ...raw.source } : raw.source;
+  if (source && source.elements) {
+    source.elements = normalizeElements(source.elements);
+  }
   return {
     ...raw,
     name: String(raw.name || "").trim(),
+    source,
     values: {
       width: parsePositiveInt(values.width) || BUILTIN_RESIZE_VALUES.width,
       height: parsePositiveInt(values.height) || BUILTIN_RESIZE_VALUES.height,
@@ -1317,8 +1331,14 @@ function normalizeTemplate(raw) {
   };
 }
 
-function newDraftVariant() {
-  return { outputDocument: "", elements: deepClone(DEFAULT_VARIANT_ELEMENTS) };
+// 模組的預設值：建立模組時從來源 PSD 換算的位置（source.elements），沒有才用置中預設值
+function templateDefaultElements(template) {
+  const measured = template && template.source && template.source.elements;
+  return deepClone(measured || DEFAULT_VARIANT_ELEMENTS);
+}
+
+function newDraftVariant(template) {
+  return { outputDocument: "", elements: templateDefaultElements(template) };
 }
 
 async function readLegacyResizeSettings() {
@@ -1615,7 +1635,11 @@ async function layoutSmartByPercents(layer, canvasW, canvasH, spec) {
 async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
   const layers = requireMcdSmartLayers(doc);
 
-  await layoutObjectFitCover(layers.$BG, canvasW, canvasH);
+  if (variant.elements.$BG) {
+    await layoutSmartByPercents(layers.$BG, canvasW, canvasH, variant.elements.$BG);
+  } else {
+    await layoutObjectFitCover(layers.$BG, canvasW, canvasH);
+  }
 
   for (const name of MCD_POSITION_ELEMENT_NAMES) {
     await layoutSmartByPercents(
@@ -1669,6 +1693,59 @@ function findOpenDocumentByPath(path) {
   return null;
 }
 
+function findTemplateIndexForDocument(doc) {
+  const path = readDocumentPath(doc);
+  const byPath = path
+    ? moduleStore.templates.findIndex(
+        (template) => template.source && template.source.path === path,
+      )
+    : -1;
+  if (byPath >= 0 || !doc) {
+    return byPath;
+  }
+  return moduleStore.templates.findIndex(
+    (template) => template.source && template.source.fileName === doc.name,
+  );
+}
+
+function suggestTemplateName(doc) {
+  return `${stripExtension(doc.name)}-${formatTimestamp()}`;
+}
+
+/**
+ * 依母版原稿換算各圖層的百分比：以來源工作區域（或整份文件）為畫布，
+ *   leftPercent  = (圖層左 - 畫布左) / 畫布寬
+ *   topPercent   = (圖層上 - 畫布上) / 畫布高
+ *   widthPercent = 圖層寬 / 畫布寬
+ * 與排版時相同使用 boundsNoEffects。$BG 不換算，維持自動 cover。
+ */
+function measureSourceElements(master) {
+  const container = getMcdSourceContainer(master);
+  const layers = requireMcdSmartLayers(container);
+  const frame =
+    container === master
+      ? {
+          left: 0,
+          top: 0,
+          right: unitNumber(master.width),
+          bottom: unitNumber(master.height),
+        }
+      : readLayerBounds(container);
+  const frameW = Math.max(frame.right - frame.left, 1);
+  const frameH = Math.max(frame.bottom - frame.top, 1);
+
+  const out = {};
+  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    const b = readLayerBounds(layers[name]);
+    out[name] = {
+      leftPercent: roundTo(((b.left - frame.left) / frameW) * 100, 2),
+      topPercent: roundTo(((b.top - frame.top) / frameH) * 100, 2),
+      widthPercent: roundTo((Math.max(b.right - b.left, 1) / frameW) * 100, 2),
+    };
+  }
+  return out;
+}
+
 function validMasterOrNull(doc) {
   if (!doc) {
     return null;
@@ -1681,10 +1758,23 @@ function validMasterOrNull(doc) {
   }
 }
 
+// 切換作用中文件會觸發 select 事件，必須在 modal 範圍內執行
+async function activateDocument(doc) {
+  if (!doc || (app.activeDocument && app.activeDocument.id === doc.id)) {
+    return;
+  }
+  await core.executeAsModal(
+    async () => {
+      app.activeDocument = doc;
+    },
+    { commandName: "切換文件" },
+  );
+}
+
 async function openPsdAsMaster(file) {
   const opened = findOpenDocumentByPath(file.nativePath);
   if (opened) {
-    app.activeDocument = opened;
+    await activateDocument(opened);
     return opened;
   }
   let doc = null;
@@ -1710,7 +1800,6 @@ async function generateResizeDocuments(master, values) {
   if (!variants.length) {
     throw new Error("此模組還沒有已命名的版型，請先輸入版型名稱並按「新增」。");
   }
-  app.activeDocument = master;
 
   const sourceContainer = getMcdSourceContainer(master);
   const sourceLayers = requireMcdSmartLayers(sourceContainer);
@@ -1755,7 +1844,7 @@ async function generateResizeDocuments(master, values) {
   }
 
   try {
-    app.activeDocument = master;
+    await activateDocument(master);
   } catch (_error) {
     // 母版可能已被關閉
   }
@@ -1935,6 +2024,7 @@ function showDialog(dialog, title) {
 const SETTING_STEP = 0.1;
 const MIN_WIDTH_PERCENT = 1;
 const RESIZE_CORNERS = ["nw", "ne", "sw", "se"];
+const HANDLE_SIZE = 10;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -1962,7 +2052,7 @@ function createResizeWorkspace(root) {
     previewCache: null,
     drag: null,
     images: {},
-    selectionBox: null,
+    selection: null,
   };
 
   const workspace = { root, open, show };
@@ -1978,9 +2068,36 @@ function createResizeWorkspace(root) {
     return template ? template.values.variants[state.variantIndex] || null : null;
   }
 
+  function coverSpec() {
+    // 與 layoutObjectFitCover 相同：等比放大到鋪滿畫布並置中，換算成百分比
+    const info = state.previewCache && state.previewCache.images.$BG;
+    if (!info) {
+      return { leftPercent: 0, topPercent: 0, widthPercent: 100 };
+    }
+    const canvas = canvasSize();
+    const scale = Math.max(canvas.width / info.width, canvas.height / info.height);
+    const w = info.width * scale;
+    const h = info.height * scale;
+    return {
+      leftPercent: roundTo(((canvas.width - w) / 2 / canvas.width) * 100, 2),
+      topPercent: roundTo(((canvas.height - h) / 2 / canvas.height) * 100, 2),
+      widthPercent: roundTo((w / canvas.width) * 100, 2),
+    };
+  }
+
+  function elementSpec(variant, name) {
+    if (!variant) {
+      return name === "$BG" ? coverSpec() : DEFAULT_VARIANT_ELEMENTS[name];
+    }
+    if (name === "$BG" && !variant.elements.$BG) {
+      return coverSpec();
+    }
+    return variant.elements[name];
+  }
+
   function currentSpec() {
     const variant = currentVariant();
-    return variant ? variant.elements[state.elementName] : null;
+    return variant ? elementSpec(variant, state.elementName) : null;
   }
 
   function canvasSize() {
@@ -2002,7 +2119,7 @@ function createResizeWorkspace(root) {
     const template = currentTemplate();
     if (template && !template.values.variants.length) {
       // 沒有任何版型時先放一個未命名草稿，讓使用者可以直接拖拉再命名
-      template.values.variants.push(newDraftVariant());
+      template.values.variants.push(newDraftVariant(template));
     }
     const variants = template ? template.values.variants.length : 0;
     state.variantIndex = variants
@@ -2017,7 +2134,7 @@ function createResizeWorkspace(root) {
   // ----- 欄位 -----
 
   function readFieldsAsSpec() {
-    const spec = currentSpec() || DEFAULT_VARIANT_ELEMENTS[state.elementName];
+    const spec = currentSpec() || elementSpec(null, state.elementName);
     const out = {};
     for (const key of SPEC_KEYS) {
       const n = parseFloat(fields[key].value);
@@ -2040,10 +2157,23 @@ function createResizeWorkspace(root) {
   }
 
   function commitFields() {
-    const spec = currentSpec();
-    if (spec) {
-      Object.assign(spec, readFieldsAsSpec());
+    const variant = currentVariant();
+    if (!variant) {
+      return;
     }
+    const next = readFieldsAsSpec();
+    if (state.elementName === "$BG" && !variant.elements.$BG) {
+      // 沒動過就維持自動 cover，換母版時仍會鋪滿
+      const cover = coverSpec();
+      const changed = SPEC_KEYS.some(
+        (key) => Math.abs(next[key] - cover[key]) > 0.005,
+      );
+      if (changed) {
+        variant.elements.$BG = next;
+      }
+      return;
+    }
+    Object.assign(variant.elements[state.elementName], next);
   }
 
   function stepField(key, direction) {
@@ -2077,11 +2207,8 @@ function createResizeWorkspace(root) {
   }
 
   function renderElementPicker() {
-    fillPicker(elementPicker, MCD_POSITION_ELEMENT_NAMES);
-    setPickerIndex(
-      elementPicker,
-      MCD_POSITION_ELEMENT_NAMES.indexOf(state.elementName),
-    );
+    fillPicker(elementPicker, EDITABLE_ELEMENT_NAMES);
+    setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(state.elementName));
   }
 
   function updateVariantNameValidity() {
@@ -2119,8 +2246,7 @@ function createResizeWorkspace(root) {
     if (name === state.elementName) {
       return readFieldsAsSpec();
     }
-    const variant = currentVariant();
-    return variant ? variant.elements[name] : DEFAULT_VARIANT_ELEMENTS[name];
+    return elementSpec(currentVariant(), name);
   }
 
   function applyElementStyle(name, spec) {
@@ -2133,76 +2259,72 @@ function createResizeWorkspace(root) {
     img.style.width = `${spec.widthPercent}%`;
   }
 
-  function applyBackgroundStyle() {
-    const img = state.images.$BG;
-    if (!img || !state.previewCache) {
-      return;
-    }
-    const info = state.previewCache.images.$BG;
-    const stageW = stage.clientWidth;
-    const stageH = stage.clientHeight;
-    const scale = Math.max(stageW / info.width, stageH / info.height);
-    const w = info.width * scale;
-    const h = info.height * scale;
-    img.style.left = `${(stageW - w) / 2}px`;
-    img.style.top = `${(stageH - h) / 2}px`;
-    img.style.width = `${w}px`;
-    img.style.height = `${h}px`;
-  }
-
   function updateSelectionBox() {
-    const box = state.selectionBox;
-    if (!box) {
+    const sel = state.selection;
+    if (!sel) {
       return;
     }
     const ratio = heightRatio(state.elementName);
-    if (!ratio) {
-      box.style.display = "none";
+    const hidden = !ratio;
+    sel.box.style.display = hidden ? "none" : "block";
+    sel.handles.forEach(({ node }) => {
+      node.style.display = hidden ? "none" : "block";
+    });
+    if (hidden) {
       return;
     }
     const spec = readFieldsAsSpec();
-    box.style.display = "block";
-    box.style.left = `${spec.leftPercent}%`;
-    box.style.top = `${spec.topPercent}%`;
-    box.style.width = `${spec.widthPercent}%`;
-    box.style.height = `${spec.widthPercent * ratio}%`;
+    const heightPercent = spec.widthPercent * ratio;
+    sel.box.style.left = `${spec.leftPercent}%`;
+    sel.box.style.top = `${spec.topPercent}%`;
+    sel.box.style.width = `${spec.widthPercent}%`;
+    sel.box.style.height = `${heightPercent}%`;
+
+    // 控制點夾在預覽範圍內：$BG 等超出畫布的圖層也拉得到角落
+    const stageW = stage.clientWidth;
+    const stageH = stage.clientHeight;
+    const half = HANDLE_SIZE / 2;
+    sel.handles.forEach(({ corner, node }) => {
+      const xPercent = spec.leftPercent + (corner.includes("e") ? spec.widthPercent : 0);
+      const yPercent = spec.topPercent + (corner.includes("s") ? heightPercent : 0);
+      const x = clampNumber((xPercent / 100) * stageW, half, stageW - half);
+      const y = clampNumber((yPercent / 100) * stageH, half, stageH - half);
+      node.style.left = `${x - half}px`;
+      node.style.top = `${y - half}px`;
+    });
   }
 
   function updateHighlight() {
-    for (const name of MCD_POSITION_ELEMENT_NAMES) {
-      const img = state.images[name];
-      if (img) {
-        img.classList.toggle("is-active", name === state.elementName);
-      }
-    }
     updateSelectionBox();
   }
 
   function resizeStage() {
     const canvas = canvasSize();
     stage.style.height = `${(stage.clientWidth * canvas.height) / canvas.width}px`;
-    applyBackgroundStyle();
   }
 
-  function createSelectionBox(zIndex) {
+  function createSelection(zIndex) {
     const box = document.createElement("div");
     box.className = "preview-selection";
     box.style.zIndex = String(zIndex);
-    for (const corner of RESIZE_CORNERS) {
-      const handle = document.createElement("div");
-      handle.className = `preview-handle is-${corner}`;
-      handle.addEventListener("mousedown", (event) => {
+    stage.appendChild(box);
+    const handles = RESIZE_CORNERS.map((corner) => {
+      const node = document.createElement("div");
+      node.className = `preview-handle is-${corner}`;
+      node.style.zIndex = String(zIndex + 1);
+      node.addEventListener("mousedown", (event) => {
         startResize(corner, event);
       });
-      box.appendChild(handle);
-    }
-    return box;
+      stage.appendChild(node);
+      return { corner, node };
+    });
+    return { box, handles };
   }
 
   function renderPreview() {
     stage.innerHTML = "";
     state.images = {};
-    state.selectionBox = null;
+    state.selection = null;
     const cache = state.previewCache;
     if (!cache) {
       return;
@@ -2215,17 +2337,14 @@ function createResizeWorkspace(root) {
       img.style.zIndex = String(index + 1);
       stage.appendChild(img);
       state.images[name] = img;
-      if (name !== "$BG") {
-        img.classList.add("is-draggable");
-        img.addEventListener("mousedown", (event) => {
-          startMove(name, event);
-        });
-        applyElementStyle(name, specForPreview(name));
-      }
+      img.classList.add("is-draggable");
+      img.addEventListener("mousedown", (event) => {
+        startMove(name, event);
+      });
+      applyElementStyle(name, specForPreview(name));
     });
 
-    state.selectionBox = createSelectionBox(cache.order.length + 1);
-    stage.appendChild(state.selectionBox);
+    state.selection = createSelection(cache.order.length + 1);
 
     resizeStage();
     updateHighlight();
@@ -2273,7 +2392,7 @@ function createResizeWorkspace(root) {
     }
     commitFields();
     state.elementName = name;
-    setPickerIndex(elementPicker, MCD_POSITION_ELEMENT_NAMES.indexOf(name));
+    setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(name));
     loadFields();
     updateHighlight();
   }
@@ -2416,7 +2535,17 @@ function createResizeWorkspace(root) {
       const doc = await openPsdAsMaster(file);
       requireMcdSmartLayers(getMcdSourceContainer(doc));
       state.master = doc;
-      templateNameInput.value = `${stripExtension(file.name)}-${formatTimestamp()}`;
+      const existing = findTemplateIndexForDocument(doc);
+      if (existing >= 0) {
+        templateNameInput.value = "";
+        templateNameInput.classList.remove("is-suggested");
+        state.templateIndex = existing;
+        state.variantIndex = 0;
+        renderAll();
+        setStatus(`${doc.name} 已有模組「${moduleStore.templates[existing].name}」。`);
+      } else {
+        suggestTemplate(doc);
+      }
       templateNameInput.classList.remove("is-invalid");
       await refreshPreview(false);
     } catch (error) {
@@ -2441,23 +2570,34 @@ function createResizeWorkspace(root) {
       return;
     }
 
+    let measured;
+    try {
+      measured = measureSourceElements(state.master);
+    } catch (error) {
+      await app.showAlert(error.message || String(error));
+      return;
+    }
+
     commitFields();
-    moduleStore.templates.push({
+    const template = {
       name,
       source: {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
+        elements: measured,
       },
       values: {
         width: BUILTIN_RESIZE_VALUES.width,
         height: BUILTIN_RESIZE_VALUES.height,
-        variants: [newDraftVariant()],
+        variants: [],
       },
-    });
+    };
+    template.values.variants.push(newDraftVariant(template));
+    moduleStore.templates.push(template);
     state.templateIndex = moduleStore.templates.length - 1;
     state.variantIndex = 0;
     templateNameInput.value = "";
-    templateNameInput.classList.remove("is-invalid");
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
 
     await persist(`已新增模組「${name}」，請輸入版型名稱後按「新增」。`);
     renderAll();
@@ -2485,6 +2625,7 @@ function createResizeWorkspace(root) {
     }
 
     commitFields();
+    ensureSourceElements(template);
     // 有未命名的草稿（剛新增模組時的第 0 筆）就直接替它命名，保留使用者拖拉過的位置
     const draft = variants.find((variant) => !variant.outputDocument);
     if (draft) {
@@ -2493,7 +2634,7 @@ function createResizeWorkspace(root) {
     } else {
       variants.push({
         outputDocument: name,
-        elements: deepClone(DEFAULT_VARIANT_ELEMENTS),
+        elements: templateDefaultElements(template),
       });
       state.variantIndex = variants.length - 1;
     }
@@ -2514,7 +2655,26 @@ function createResizeWorkspace(root) {
         return deepClone(builtin.elements);
       }
     }
-    return deepClone(DEFAULT_VARIANT_ELEMENTS);
+    ensureSourceElements(template);
+    return templateDefaultElements(template);
+  }
+
+  function ensureSourceElements(template) {
+    // 舊模組沒有記錄原稿位置：若來源 PSD 正是目前母版，就補量一次並存進模組
+    const source = template.source;
+    if (!source || source.elements || !isDocumentOpen(state.master)) {
+      return;
+    }
+    const masterPath = readDocumentPath(state.master);
+    const sameDoc = source.path ? source.path === masterPath : source.fileName === state.master.name;
+    if (!sameDoc) {
+      return;
+    }
+    try {
+      source.elements = measureSourceElements(state.master);
+    } catch (_error) {
+      // 母版圖層不齊，沿用置中預設值
+    }
   }
 
   async function resetVariant() {
@@ -2528,6 +2688,7 @@ function createResizeWorkspace(root) {
     if (!(await showDialog(el("reset-dialog"), "還原預設值"))) {
       return;
     }
+    // $BG 不在預設值內，還原後回到自動 cover
     variant.elements = defaultElementsFor(template, variant);
     loadFields();
     renderPreview();
@@ -2562,13 +2723,13 @@ function createResizeWorkspace(root) {
 
   elementPicker.addEventListener("change", (event) => {
     commitFields();
-    state.elementName = MCD_POSITION_ELEMENT_NAMES[readPickerIndex(event)];
+    state.elementName = EDITABLE_ELEMENT_NAMES[readPickerIndex(event)];
     loadFields();
     updateHighlight();
   });
 
   templateNameInput.addEventListener("input", () => {
-    templateNameInput.classList.remove("is-invalid");
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
   });
   variantNameInput.addEventListener("input", updateVariantNameValidity);
 
@@ -2629,18 +2790,30 @@ function createResizeWorkspace(root) {
 
   // ----- 對外 -----
 
+  function suggestTemplate(doc) {
+    // 尚未建立模組的 PSD：帶入「檔名-時間」，使用者確認後按「新增」
+    templateNameInput.value = suggestTemplateName(doc);
+    templateNameInput.classList.add("is-suggested");
+    setStatus(`${doc.name} 尚未建立模組，確認名稱後按「新增」。`);
+  }
+
   function open(master, note) {
     if (!master || !state.master || master.id !== state.master.id) {
       state.previewCache = null;
     }
     state.master = master;
-    state.templateIndex = 0;
+    const existing = master ? findTemplateIndexForDocument(master) : -1;
+    state.templateIndex = Math.max(existing, 0);
     state.variantIndex = 0;
     state.elementName = MCD_POSITION_ELEMENT_NAMES[0];
     templateNameInput.value = "";
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
     variantNameInput.value = "";
     renderAll();
     setStatus(note || "");
+    if (master && existing < 0) {
+      suggestTemplate(master);
+    }
   }
 
   function show() {
@@ -2713,7 +2886,17 @@ async function openResizeSettingsPanel() {
   document.getElementById("btn-resize-1200x629").style.display = "none";
   document.getElementById("resize-settings-panel").style.display = "block";
   selectTab(activeTab);
+
+  // 目前開啟的母版還沒有模組：提醒一次（同一份文件本次工作階段不重複提醒）
+  if (master && findTemplateIndexForDocument(master) < 0 && !remindedMasterIds.has(master.id)) {
+    remindedMasterIds.add(master.id);
+    await app.showAlert(
+      `${master.name} 尚未建立模組。\n已帶入模組名稱「${suggestTemplateName(master)}」，確認後按「新增」。`,
+    );
+  }
 }
+
+const remindedMasterIds = new Set();
 
 function closeResizeSettingsPanel() {
   document.getElementById("resize-settings-panel").style.display = "none";
