@@ -1827,6 +1827,15 @@ function runModal(task, commandName) {
   });
 }
 
+// Photoshop 正在使用者操作中（例如正在輸入文字）時會拒絕外掛的 modal 指令
+function describeModalError(error) {
+  const message = String((error && error.message) || error || "");
+  if (/modal/i.test(message)) {
+    return "Photoshop 正在編輯中（例如文字游標還在閃），請按 Enter 或 Esc 結束編輯後，再按「重新擷取圖層」。";
+  }
+  return message;
+}
+
 // 切換作用中文件會觸發 select 事件，必須在 modal 範圍內執行
 async function activateDocument(doc) {
   if (!doc) {
@@ -2185,7 +2194,7 @@ function createResizeWorkspace(root) {
     selection: null,
   };
 
-  const workspace = { root, open, show, followDocument };
+  const workspace = { root, open, show };
 
   // ----- 目前選取 -----
 
@@ -2550,7 +2559,7 @@ function createResizeWorkspace(root) {
     } catch (error) {
       state.previewCache = null;
       renderPreview();
-      setStatus(`預覽擷取失敗：${error.message || error}`);
+      setStatus(`預覽擷取失敗：${describeModalError(error)}`);
     }
   }
 
@@ -2713,26 +2722,16 @@ function createResizeWorkspace(root) {
     clampSelection();
 
     // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
+    // 模組的來源 PSD 若已開啟，預覽改用它（只換面板的預覽來源，不切換 Photoshop 文件）
     const template = currentTemplate();
     const sourceDoc = findOpenDocumentForTemplate(template);
-    const switchDoc =
-      sourceDoc && validMasterOrNull(sourceDoc) && sourceDoc !== state.master;
-    if (switchDoc) {
+    if (sourceDoc && validMasterOrNull(sourceDoc)) {
       state.master = sourceDoc;
     }
 
     renderVariantPicker();
     loadFields();
     refreshPreview(false);
-
-    if (switchDoc) {
-      // Photoshop 也切到該模組的來源 PSD；隨後的 select 通知因母版相同會略過
-      activateDocument(sourceDoc).catch((error) => {
-        setStatus(`無法切換到 ${sourceDoc.name}：${error.message || error}`);
-      });
-    } else if (template && template.source && !sourceDoc) {
-      setStatus(`模組來源 ${template.source.fileName} 未開啟，預覽仍使用 ${state.master ? state.master.name : "目前文件"}。`);
-    }
   }
 
   async function uploadPsd() {
@@ -3244,32 +3243,6 @@ function createResizeWorkspace(root) {
     }
   }
 
-  // Photoshop 切換到另一份母版時，面板跟著換預覽來源與對應的模組
-  function followDocument(doc) {
-    if (!doc || (state.master && state.master.id === doc.id)) {
-      return;
-    }
-    commitFields();
-    state.master = doc;
-    state.previewCache = null;
-    const existing = findTemplateIndexForDocument(doc);
-    if (existing >= 0) {
-      state.templateIndex = existing;
-      state.variantIndex = 0;
-    }
-    templateNameInput.value = "";
-    templateNameInput.classList.remove("is-invalid", "is-suggested");
-    renderAll();
-    if (existing >= 0) {
-      setStatus(`預覽來源：${doc.name}`);
-    } else {
-      suggestTemplate(doc);
-    }
-    if (root.style.display !== "none") {
-      refreshPreview(false);
-    }
-  }
-
   function show() {
     if (!isDocumentOpen(state.master)) {
       // 另一個分頁上傳過母版時，沿用目前作用中的文件
@@ -3340,43 +3313,6 @@ async function openResizeSettingsPanel() {
   document.getElementById("btn-resize-1200x629").style.display = "none";
   document.getElementById("resize-settings-panel").style.display = "block";
   selectTab(activeTab);
-}
-
-let activeDocumentSyncTimer = null;
-
-function syncWithActiveDocument() {
-  const panel = document.getElementById("resize-settings-panel");
-  if (photoshopBusy || panel.style.display === "none") {
-    return;
-  }
-  let active = null;
-  try {
-    active = app.activeDocument;
-  } catch (_error) {
-    return;
-  }
-  const master = validMasterOrNull(active);
-  if (!master) {
-    return;
-  }
-  Object.keys(workspaces).forEach((key) => {
-    workspaces[key].followDocument(master);
-  });
-}
-
-function scheduleActiveDocumentSync() {
-  // 連續事件（開檔、切換分頁）合併處理，並等 Photoshop 更新完作用中文件
-  clearTimeout(activeDocumentSyncTimer);
-  activeDocumentSyncTimer = setTimeout(syncWithActiveDocument, 150);
-}
-
-try {
-  action.addNotificationListener(
-    [{ event: "select" }, { event: "open" }, { event: "close" }],
-    scheduleActiveDocumentSync,
-  );
-} catch (_error) {
-  // 舊版 Photoshop 不支援通知，只在開啟面板時同步
 }
 
 function closeResizeSettingsPanel() {
