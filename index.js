@@ -1474,6 +1474,8 @@ const moduleStore = {
   ready: false,
   folder: null,
   templates: [],
+  // 套圖分頁的模組，與 Resize 的 templates 分開
+  applyTemplates: [],
   reference: null,
   listeners: [],
 };
@@ -1540,12 +1542,16 @@ async function readModuleFile(folder) {
   const data = JSON.parse(await file.read());
   return {
     templates: Array.isArray(data && data.templates) ? data.templates : [],
+    applyTemplates: Array.isArray(data && data.applyTemplates) ? data.applyTemplates : [],
     reference: normalizeReference(data && data.reference),
   };
 }
 
 function moduleFileContent() {
-  const content = { templates: moduleStore.templates };
+  const content = {
+    templates: moduleStore.templates,
+    applyTemplates: moduleStore.applyTemplates,
+  };
   if (moduleStore.reference) {
     content.reference = moduleStore.reference;
   }
@@ -1586,6 +1592,9 @@ async function loadModuleStore(folder) {
   moduleStore.folder = folder;
   moduleStore.templates = ((raw && raw.templates) || []).map(normalizeTemplate).filter(Boolean);
   moduleStore.reference = raw ? raw.reference : null;
+  moduleStore.applyTemplates = ((raw && raw.applyTemplates) || [])
+    .map(normalizeApplyTemplate)
+    .filter((template) => template && template.name);
   if (!moduleStore.templates.length) {
     moduleStore.templates.push(await createBuiltinTemplate());
     await saveModuleStore();
@@ -1598,6 +1607,7 @@ async function useInMemoryModuleStore() {
   // 沒有可用的 module.json：先用記憶體內的內建模組，儲存時會再詢問資料夾
   moduleStore.folder = null;
   moduleStore.templates = [await createBuiltinTemplate()];
+  moduleStore.applyTemplates = [];
   moduleStore.ready = true;
   notifyModuleStoreChanged(null);
 }
@@ -1836,19 +1846,19 @@ function findOpenDocumentByPath(path) {
   return null;
 }
 
-function findTemplateIndexForDocument(doc) {
+function findTemplateIndexIn(list, doc) {
   const path = readDocumentPath(doc);
   const byPath = path
-    ? moduleStore.templates.findIndex(
-        (template) => template.source && template.source.path === path,
-      )
+    ? list.findIndex((template) => template.source && template.source.path === path)
     : -1;
   if (byPath >= 0 || !doc) {
     return byPath;
   }
-  return moduleStore.templates.findIndex(
-    (template) => template.source && template.source.fileName === doc.name,
-  );
+  return list.findIndex((template) => template.source && template.source.fileName === doc.name);
+}
+
+function findTemplateIndexForDocument(doc) {
+  return findTemplateIndexIn(moduleStore.templates, doc);
 }
 
 function suggestTemplateName(doc) {
@@ -2339,6 +2349,174 @@ const HANDLE_SIZE = 10;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
+}
+
+// ----- 管理視窗（樣板／模組共用）：勾選後才能編輯（改名）或刪除 -----
+//
+// config:
+//   prefix       HTML data-role 前綴，例如 "variant-manager"
+//   title        視窗標題
+//   emptyLabel   名稱空白時顯示的文字
+//   listItems()  目前的項目陣列
+//   getName(item) / setName(item, name)
+//   isSameName(a, b)
+//   canDelete(item) 可省略
+//   remove(item) 從資料中移除並調整選取
+//   afterChange() 資料變動後重畫面板
+//   deletedMessage(item)
+// ctx: { el(role) 找面板元素, beforeOpen() 開視窗前先寫回欄位, persist(message, toast) 存檔 }
+function createListManager(config, ctx) {
+  const role = (suffix) => ctx.el(`${config.prefix}${suffix}`);
+  const ui = {
+    dialog: role(""),
+    list: role("-list"),
+    listView: role("-list-view"),
+    confirmView: role("-confirm-view"),
+  };
+  let rows = [];
+  let pendingDelete = null;
+
+  function showView(confirm) {
+    ui.listView.style.display = confirm ? "none" : "block";
+    ui.confirmView.style.display = confirm ? "block" : "none";
+  }
+
+  function makeButton(label, disabled, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "small-btn";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function renderList() {
+    ui.list.innerHTML = "";
+    rows.forEach((row) => {
+      const line = document.createElement("div");
+      line.className = "manager-row";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = row.checked;
+      check.addEventListener("change", () => {
+        row.checked = check.checked;
+        if (!row.checked) {
+          row.editing = false;
+        }
+        renderList();
+      });
+      line.appendChild(check);
+
+      if (row.editing) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "text-input manager-name";
+        input.value = row.name;
+        input.classList.toggle("is-invalid", row.invalid);
+        input.addEventListener("input", () => {
+          row.name = input.value;
+          row.invalid = false;
+          input.classList.remove("is-invalid");
+        });
+        line.appendChild(input);
+      } else {
+        const label = document.createElement("span");
+        label.className = "manager-name";
+        label.textContent = row.name || config.emptyLabel;
+        line.appendChild(label);
+      }
+
+      line.appendChild(
+        makeButton("編輯", !row.checked, () => {
+          row.editing = true;
+          renderList();
+        }),
+      );
+      const deletable = !config.canDelete || config.canDelete(row.item);
+      line.appendChild(
+        makeButton("刪除", !row.checked || !deletable, () => {
+          pendingDelete = row;
+          showView(true);
+        }),
+      );
+
+      ui.list.appendChild(line);
+    });
+  }
+
+  function open() {
+    ctx.beforeOpen();
+    rows = config.listItems().map((item) => ({
+      item,
+      name: config.getName(item),
+      checked: false,
+      editing: false,
+      invalid: false,
+    }));
+    pendingDelete = null;
+    renderList();
+    showView(false);
+    showDialog(ui.dialog, config.title, {
+      resize: "both",
+      size: { width: 460, height: 320 },
+    });
+  }
+
+  async function confirmDelete() {
+    const row = pendingDelete;
+    pendingDelete = null;
+    showView(false);
+    if (!row) {
+      return;
+    }
+    config.remove(row.item);
+    rows = rows.filter((item) => item !== row);
+    config.afterChange();
+    renderList();
+    await ctx.persist(config.deletedMessage(row.item));
+  }
+
+  async function save() {
+    // 名稱不可空白、不可重複
+    let valid = true;
+    rows.forEach((row, i) => {
+      const name = row.name.trim();
+      const duplicate = rows.some(
+        (other, j) => j !== i && config.isSameName(other.name.trim(), name),
+      );
+      row.invalid = row.editing && (!name || duplicate);
+      if (row.invalid) {
+        valid = false;
+      }
+    });
+    if (!valid) {
+      renderList();
+      return;
+    }
+
+    rows.forEach((row) => {
+      if (row.editing) {
+        config.setName(row.item, row.name.trim());
+      }
+    });
+    ui.dialog.close("save");
+    config.afterChange();
+    await ctx.persist("已儲存改動", "已儲存改動");
+  }
+
+  role("-save").addEventListener("click", save);
+  role("-close").addEventListener("click", () => {
+    ui.dialog.close("cancel");
+  });
+  role("-delete-confirm").addEventListener("click", confirmDelete);
+  role("-delete-cancel").addEventListener("click", () => {
+    pendingDelete = null;
+    showView(false);
+  });
+
+  return { open };
 }
 
 function createResizeWorkspace(root) {
@@ -3234,172 +3412,6 @@ function createResizeWorkspace(root) {
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
   }
 
-  // ----- 管理視窗（樣板／模組共用）：勾選後才能編輯（改名）或刪除 -----
-  //
-  // config:
-  //   prefix       HTML data-role 前綴，例如 "variant-manager"
-  //   title        視窗標題
-  //   emptyLabel   名稱空白時顯示的文字
-  //   listItems()  目前的項目陣列
-  //   getName(item) / setName(item, name)
-  //   isSameName(a, b)
-  //   canDelete(item) 可省略
-  //   remove(item) 從資料中移除並調整選取
-  //   afterChange() 資料變動後重畫面板
-  //   deletedMessage(item)
-  function createListManager(config) {
-    const role = (suffix) => el(`${config.prefix}${suffix}`);
-    const ui = {
-      dialog: role(""),
-      list: role("-list"),
-      listView: role("-list-view"),
-      confirmView: role("-confirm-view"),
-    };
-    let rows = [];
-    let pendingDelete = null;
-
-    function showView(confirm) {
-      ui.listView.style.display = confirm ? "none" : "block";
-      ui.confirmView.style.display = confirm ? "block" : "none";
-    }
-
-    function makeButton(label, disabled, onClick) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "small-btn";
-      button.textContent = label;
-      button.disabled = disabled;
-      button.addEventListener("click", onClick);
-      return button;
-    }
-
-    function renderList() {
-      ui.list.innerHTML = "";
-      rows.forEach((row) => {
-        const line = document.createElement("div");
-        line.className = "manager-row";
-
-        const check = document.createElement("input");
-        check.type = "checkbox";
-        check.checked = row.checked;
-        check.addEventListener("change", () => {
-          row.checked = check.checked;
-          if (!row.checked) {
-            row.editing = false;
-          }
-          renderList();
-        });
-        line.appendChild(check);
-
-        if (row.editing) {
-          const input = document.createElement("input");
-          input.type = "text";
-          input.className = "text-input manager-name";
-          input.value = row.name;
-          input.classList.toggle("is-invalid", row.invalid);
-          input.addEventListener("input", () => {
-            row.name = input.value;
-            row.invalid = false;
-            input.classList.remove("is-invalid");
-          });
-          line.appendChild(input);
-        } else {
-          const label = document.createElement("span");
-          label.className = "manager-name";
-          label.textContent = row.name || config.emptyLabel;
-          line.appendChild(label);
-        }
-
-        line.appendChild(
-          makeButton("編輯", !row.checked, () => {
-            row.editing = true;
-            renderList();
-          }),
-        );
-        const deletable = !config.canDelete || config.canDelete(row.item);
-        line.appendChild(
-          makeButton("刪除", !row.checked || !deletable, () => {
-            pendingDelete = row;
-            showView(true);
-          }),
-        );
-
-        ui.list.appendChild(line);
-      });
-    }
-
-    function open() {
-      commitFields();
-      rows = config.listItems().map((item) => ({
-        item,
-        name: config.getName(item),
-        checked: false,
-        editing: false,
-        invalid: false,
-      }));
-      pendingDelete = null;
-      renderList();
-      showView(false);
-      showDialog(ui.dialog, config.title, {
-        resize: "both",
-        size: { width: 460, height: 320 },
-      });
-    }
-
-    async function confirmDelete() {
-      const row = pendingDelete;
-      pendingDelete = null;
-      showView(false);
-      if (!row) {
-        return;
-      }
-      config.remove(row.item);
-      rows = rows.filter((item) => item !== row);
-      config.afterChange();
-      renderList();
-      await persist(config.deletedMessage(row.item));
-    }
-
-    async function save() {
-      // 名稱不可空白、不可重複
-      let valid = true;
-      rows.forEach((row, i) => {
-        const name = row.name.trim();
-        const duplicate = rows.some(
-          (other, j) => j !== i && config.isSameName(other.name.trim(), name),
-        );
-        row.invalid = row.editing && (!name || duplicate);
-        if (row.invalid) {
-          valid = false;
-        }
-      });
-      if (!valid) {
-        renderList();
-        return;
-      }
-
-      rows.forEach((row) => {
-        if (row.editing) {
-          config.setName(row.item, row.name.trim());
-        }
-      });
-      ui.dialog.close("save");
-      config.afterChange();
-      await persist("已儲存改動", "已儲存改動");
-    }
-
-    role("-save").addEventListener("click", save);
-    role("-close").addEventListener("click", () => {
-      ui.dialog.close("cancel");
-    });
-    role("-delete-confirm").addEventListener("click", confirmDelete);
-    role("-delete-cancel").addEventListener("click", () => {
-      pendingDelete = null;
-      showView(false);
-    });
-
-    return { open };
-  }
 
   const variantManager = createListManager({
     prefix: "variant-manager",
@@ -3429,7 +3441,7 @@ function createResizeWorkspace(root) {
       renderPreview();
     },
     deletedMessage: (variant) => `已刪除樣板「${variantLabel(variant)}」`,
-  });
+  }, { el, beforeOpen: commitFields, persist });
 
   const templateManager = createListManager({
     prefix: "template-manager",
@@ -3456,7 +3468,7 @@ function createResizeWorkspace(root) {
     },
     afterChange: renderAll,
     deletedMessage: (template) => `已刪除模組「${template.name}」`,
-  });
+  }, { el, beforeOpen: commitFields, persist });
 
   // ----- 事件 -----
 
@@ -3653,12 +3665,815 @@ function createResizeWorkspace(root) {
   return workspace;
 }
 
+
+// ---------- 套圖：依 PSD 原稿位置，把勾選的圖層換成資料夾裡的圖 ----------
+//
+// 套圖模組（module.json 的 applyTemplates，與 Resize 分開）：
+//   { name, source: { fileName, path }, layers: ["$PROD", "$CTA"], srcPath: "…/MCD" }
+// 圖檔資料夾結構：srcPath/PROD/01.jpg、02.jpg…；srcPath/CTA/01.jpg…（資料夾名稱＝圖層名去掉 $）
+// 第 n 組＝各圖層資料夾排序後的第 n 張，產出「套圖0n.psd」；某圖層沒有第 n 張時保留原圖。
+
+const APPLY_LAYER_NAMES = ["$LOGO", "$PROD", "$HEAD", "$CTA", "$SM", "$BG"];
+const APPLY_IMAGE_PATTERN = /\.(jpe?g|png|psd|psb|tiff?|webp|gif|bmp)$/i;
+const SRC_FOLDER_TOKENS_KEY = "bannerResizer.srcFolderTokens";
+
+function normalizeApplyTemplate(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const layers = Array.isArray(raw.layers)
+    ? APPLY_LAYER_NAMES.filter((name) => raw.layers.includes(name))
+    : [];
+  return {
+    name: String(raw.name || "").trim(),
+    source: raw.source && typeof raw.source === "object" ? { ...raw.source } : null,
+    layers,
+    srcPath: String(raw.srcPath || "").trim(),
+  };
+}
+
+function readSrcFolderTokens() {
+  try {
+    return JSON.parse(localStorage.getItem(SRC_FOLDER_TOKENS_KEY)) || {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function rememberSrcFolder(path, token) {
+  const tokens = readSrcFolderTokens();
+  tokens[path] = token;
+  try {
+    localStorage.setItem(SRC_FOLDER_TOKENS_KEY, JSON.stringify(tokens));
+  } catch (_error) {
+    // 記不住就下次再選
+  }
+}
+
+/**
+ * 找到圖檔資料夾：先用「選擇資料夾」記住的授權，
+ * 再試直接用路徑開啟（需要 manifest 給 localFileSystem 完整權限，否則會被拒絕）。
+ */
+async function resolveSrcFolder(path) {
+  const trimmed = String(path || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const token = readSrcFolderTokens()[trimmed];
+  if (token) {
+    try {
+      return await localFileSystem.getEntryForPersistentToken(token);
+    } catch (_error) {
+      // 授權失效，改試路徑
+    }
+  }
+  if (typeof localFileSystem.getEntryWithUrl === "function") {
+    const normalized = trimmed.replace(/\\/g, "/");
+    try {
+      return await localFileSystem.getEntryWithUrl(
+        `file:${normalized.startsWith("/") ? "" : "/"}${normalized}`,
+      );
+    } catch (_error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function naturalCompare(a, b) {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+// 讀圖檔資料夾，依勾選圖層組出每一組要替換的圖
+async function collectApplySets(folder, layerNames) {
+  const entries = await folder.getEntries();
+  const perLayer = {};
+  for (const name of layerNames) {
+    const key = name.replace("$", "").toLowerCase();
+    const sub = entries.find((entry) => entry.isFolder && entry.name.toLowerCase() === key);
+    const files = sub
+      ? (await sub.getEntries())
+          .filter((entry) => entry.isFile && APPLY_IMAGE_PATTERN.test(entry.name))
+          .sort((a, b) => naturalCompare(a.name, b.name))
+      : [];
+    perLayer[name] = files;
+  }
+  const count = Math.max(0, ...layerNames.map((name) => perLayer[name].length));
+  const sets = [];
+  for (let i = 0; i < count; i++) {
+    const files = {};
+    layerNames.forEach((name) => {
+      if (perLayer[name][i]) {
+        files[name] = perLayer[name][i];
+      }
+    });
+    sets.push({ name: `套圖${String(i + 1).padStart(2, "0")}.psd`, files });
+  }
+  return { sets, perLayer };
+}
+
+// 各圖層在原稿畫布上的位置（百分比），畫布＝含齊圖層的工作區域或整份文件
+function measureLayerFrames(master) {
+  const container = getMcdSourceContainer(master);
+  const layers = requireMcdSmartLayers(container);
+  const frame =
+    container === master
+      ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+      : readLayerBounds(container);
+  const width = Math.max(frame.right - frame.left, 1);
+  const height = Math.max(frame.bottom - frame.top, 1);
+  const frames = {};
+  for (const name of MCD_SMART_LAYER_NAMES) {
+    const b = readLayerBounds(layers[name]);
+    frames[name] = {
+      left: ((b.left - frame.left) / width) * 100,
+      top: ((b.top - frame.top) / height) * 100,
+      width: ((b.right - b.left) / width) * 100,
+      height: ((b.bottom - b.top) / height) * 100,
+    };
+  }
+  return { frames, width, height };
+}
+
+function imageMimeType(fileName) {
+  const ext = String(fileName).split(".").pop().toLowerCase();
+  if (ext === "png") {
+    return "image/png";
+  }
+  if (ext === "gif") {
+    return "image/gif";
+  }
+  if (ext === "webp") {
+    return "image/webp";
+  }
+  return "image/jpeg";
+}
+
+async function readImageDataUrl(file) {
+  const buffer = await file.read({ format: formats.binary });
+  return `data:${imageMimeType(file.name)};base64,${arrayBufferToBase64(buffer)}`;
+}
+
+/**
+ * 替換智慧型物件內容，並把新圖等比縮放塞回原本圖層的框內、置中，
+ * 所以位置與大小都和原稿一致。
+ */
+async function replaceLayerImage(layer, imageFile) {
+  if (!isSmartObject(layer)) {
+    throw new Error(`${layer.name} 不是智慧型物件，無法替換圖片`);
+  }
+  const before = boundsBox(layer);
+  await selectOnlyLayer(layer);
+  const token = localFileSystem.createSessionToken(imageFile);
+  await action.batchPlay(
+    [{ _obj: "placedLayerReplaceContents", null: { _path: token, _kind: "local" } }],
+    { synchronousExecution: true },
+  );
+  const after = boundsBox(layer);
+  const scale = Math.min(before.width / after.width, before.height / after.height);
+  await scaleLayerUniform(layer, Math.max(scale, 0.01));
+  const fitted = boundsBox(layer);
+  await translateLayer(
+    layer,
+    before.centerX - fitted.centerX,
+    before.centerY - fitted.centerY,
+  );
+}
+
+// 每一組：複製原始 PSD → 換圖 → 另存 → 關閉副本（不修改原稿）
+async function generateApplyDocuments(master, sets) {
+  if (!isDocumentOpen(master)) {
+    throw new Error("母版已關閉，請重新開啟或上傳母版。");
+  }
+  const folder = await localFileSystem.getFolder();
+  if (!folder) {
+    return 0;
+  }
+  const errors = [];
+  let done = 0;
+  for (const set of sets) {
+    try {
+      const file = await folder.createFile(set.name, { overwrite: true });
+      await runModal(async () => {
+        app.activeDocument = master;
+        const copy = await master.duplicate(stripExtension(set.name));
+        app.activeDocument = copy;
+        try {
+          const container = getMcdSourceContainer(copy);
+          for (const name of Object.keys(set.files)) {
+            const layer = findNamedLayer(container, name);
+            if (!layer) {
+              throw new Error(`找不到圖層 ${name}`);
+            }
+            await replaceLayerImage(layer, set.files[name]);
+          }
+          await saveDocumentAsPsd(copy, file);
+        } finally {
+          await copy.closeWithoutSaving().catch(() => {});
+        }
+      }, `產製 ${set.name}`);
+      done += 1;
+    } catch (error) {
+      errors.push(`${set.name}：${error.message || error}`);
+    }
+  }
+  try {
+    await activateDocument(master);
+  } catch (_error) {
+    // 母版可能已被關閉
+  }
+  if (errors.length) {
+    throw new Error(errors.join("\n"));
+  }
+  return done;
+}
+
+function createApplyWorkspace(root) {
+  const el = (role) => root.querySelector(`[data-role="${role}"]`);
+  const stage = el("preview-stage");
+  const templatePicker = el("template-picker");
+  const templateNameInput = el("template-name");
+  const outputPicker = el("output-picker");
+  const layerToggle = el("layer-toggle");
+  const layerPanel = el("layer-panel");
+  const srcInput = el("src-path");
+
+  const state = {
+    master: null,
+    templateIndex: 0,
+    draft: null,
+    previewCache: null,
+    frames: null,
+    sets: [],
+    outputIndex: 0,
+    imageUrls: {},
+  };
+
+  const workspace = { root, open, show, commit: commitSettings };
+
+  // ----- 目前選取 -----
+
+  function templates() {
+    return moduleStore.applyTemplates;
+  }
+
+  function currentTemplate() {
+    return state.templateIndex < 0 ? state.draft : templates()[state.templateIndex] || null;
+  }
+
+  function isDraftSelected() {
+    return state.templateIndex < 0 && Boolean(state.draft);
+  }
+
+  function pickerOffset() {
+    return state.draft ? 1 : 0;
+  }
+
+  function clampSelection() {
+    if (state.templateIndex < 0 && state.draft) {
+      return;
+    }
+    const count = templates().length;
+    state.templateIndex = count ? Math.min(Math.max(state.templateIndex, 0), count - 1) : 0;
+  }
+
+  function setStatus(text) {
+    el("preview-status").textContent = text;
+  }
+
+  function masterNeedsTemplate() {
+    return (
+      isDocumentOpen(state.master) &&
+      Boolean(validMasterOrNull(state.master)) &&
+      findTemplateIndexIn(templates(), state.master) < 0
+    );
+  }
+
+  function updateTemplateHint() {
+    el("template-hint").style.display = masterNeedsTemplate() ? "block" : "none";
+  }
+
+  // ----- 設定（勾選圖層、圖檔 src）-----
+
+  function checkedLayers() {
+    return APPLY_LAYER_NAMES.filter((name) => {
+      const box = layerPanel.querySelector(`[data-layer-name="${name}"]`);
+      return box && box.checked;
+    });
+  }
+
+  function updateLayerToggleLabel() {
+    const layers = checkedLayers();
+    layerToggle.textContent = layers.length ? layers.join("、") : "（尚未勾選圖層）";
+  }
+
+  function loadSettings() {
+    const template = currentTemplate();
+    const layers = template ? template.layers : [];
+    layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
+      box.checked = layers.includes(box.getAttribute("data-layer-name"));
+    });
+    srcInput.value = template ? template.srcPath : "";
+    updateLayerToggleLabel();
+  }
+
+  function commitSettings() {
+    const template = currentTemplate();
+    if (!template) {
+      return;
+    }
+    template.layers = checkedLayers();
+    template.srcPath = srcInput.value.trim();
+  }
+
+  function resetOutputs() {
+    state.sets = [];
+    state.outputIndex = 0;
+    renderOutputPicker();
+  }
+
+  // ----- 下拉選單 -----
+
+  function renderTemplatePicker() {
+    const names = templates().map((template) => template.name || "（未命名模組）");
+    const labels = state.draft ? [state.draft.label, ...names] : names;
+    fillPicker(templatePicker, labels);
+    if (labels.length) {
+      setPickerIndex(templatePicker, state.templateIndex + pickerOffset());
+    }
+    updateTemplateHint();
+  }
+
+  // 「預設」＝原稿；按「預覽套圖」後列出 套圖01.psd、套圖02.psd…
+  function renderOutputPicker() {
+    fillPicker(outputPicker, ["預設", ...state.sets.map((set) => set.name)]);
+    setPickerIndex(outputPicker, state.outputIndex);
+  }
+
+  function renderAll() {
+    clampSelection();
+    renderTemplatePicker();
+    renderOutputPicker();
+    loadSettings();
+    renderPreview();
+  }
+
+  // ----- 預覽：圖層照原稿位置擺放，勾選圖層換成目前這一組的圖 -----
+
+  function stageAspect() {
+    return state.frames ? state.frames.height / state.frames.width : 1;
+  }
+
+  function resizeStage() {
+    stage.style.height = `${stage.clientWidth * stageAspect()}px`;
+  }
+
+  function currentSet() {
+    return state.outputIndex > 0 ? state.sets[state.outputIndex - 1] || null : null;
+  }
+
+  function placeContained(img, frame) {
+    // 換上的圖等比塞進原圖層的框、置中（與產出時的處理相同）
+    const stageW = stage.clientWidth;
+    const stageH = stage.clientHeight;
+    const boxW = (frame.width / 100) * stageW;
+    const boxH = (frame.height / 100) * stageH;
+    const naturalW = img.naturalWidth;
+    const naturalH = img.naturalHeight;
+    if (!(naturalW > 0 && naturalH > 0 && boxW > 0 && boxH > 0)) {
+      return;
+    }
+    const scale = Math.min(boxW / naturalW, boxH / naturalH);
+    const w = naturalW * scale;
+    const h = naturalH * scale;
+    img.style.left = `${(frame.left / 100) * stageW + (boxW - w) / 2}px`;
+    img.style.top = `${(frame.top / 100) * stageH + (boxH - h) / 2}px`;
+    img.style.width = `${w}px`;
+  }
+
+  async function imageUrlFor(file) {
+    const key = file.nativePath || file.name;
+    if (!state.imageUrls[key]) {
+      state.imageUrls[key] = await readImageDataUrl(file);
+    }
+    return state.imageUrls[key];
+  }
+
+  function renderPreview() {
+    stage.innerHTML = "";
+    const cache = state.previewCache;
+    if (!cache || !state.frames) {
+      return;
+    }
+    resizeStage();
+    const set = currentSet();
+    cache.order.forEach((name) => {
+      const frame = state.frames.frames[name];
+      const img = document.createElement("img");
+      img.className = "preview-layer";
+      img.style.left = `${frame.left}%`;
+      img.style.top = `${frame.top}%`;
+      img.style.width = `${frame.width}%`;
+      const replacement = set && set.files[name];
+      if (replacement) {
+        img.classList.add("is-replaced");
+        imageUrlFor(replacement)
+          .then((url) => {
+            img.addEventListener("load", () => placeContained(img, frame));
+            img.src = url;
+          })
+          .catch((error) => {
+            setStatus(`無法讀取 ${replacement.name}：${error.message || error}`);
+          });
+      } else {
+        img.src = cache.images[name].dataUrl;
+      }
+      stage.appendChild(img);
+    });
+  }
+
+  async function refreshPreview(force) {
+    const master = state.master;
+    if (!isDocumentOpen(master)) {
+      state.previewCache = null;
+      renderPreview();
+      setStatus("請按「上傳.psd」或開啟母版後再按「開始執行」。");
+      return;
+    }
+    try {
+      state.frames = measureLayerFrames(master);
+    } catch (error) {
+      setStatus(error.message || String(error));
+      return;
+    }
+    if (!force && state.previewCache && state.previewCache.masterId === master.id) {
+      renderPreview();
+      return;
+    }
+    setStatus("擷取圖層中，請稍候…");
+    try {
+      const cache = await getPreviewCache(master, force);
+      if (state.master !== master) {
+        return;
+      }
+      state.previewCache = cache;
+      renderPreview();
+      setStatus(`預覽來源：${master.name}`);
+    } catch (error) {
+      state.previewCache = null;
+      renderPreview();
+      setStatus(`預覽擷取失敗：${describeModalError(error)}`);
+    }
+  }
+
+  // ----- 儲存 -----
+
+  async function persist(message, toast) {
+    try {
+      await saveModuleStore();
+      notifyModuleStoreChanged(workspace);
+      setStatus(message);
+      if (toast) {
+        await showToast(toast);
+      }
+      return true;
+    } catch (error) {
+      await app.showAlert(`module.json 寫入失敗：${error.message || error}`);
+      return false;
+    }
+  }
+
+  // ----- 模組 -----
+
+  function suggestTemplate(doc) {
+    const name = suggestTemplateName(doc);
+    state.draft = {
+      name,
+      label: `${stripExtension(doc.name)}（未新增）`,
+      draftFor: doc.id,
+      layers: [],
+      srcPath: "",
+    };
+    state.templateIndex = -1;
+    resetOutputs();
+    renderAll();
+    templateNameInput.value = name;
+    templateNameInput.classList.add("is-suggested");
+    setStatus(`${doc.name} 尚未建立套圖模組，確認名稱後按「新增」。`);
+  }
+
+  function selectTemplate(index) {
+    commitSettings();
+    state.templateIndex = index;
+    clampSelection();
+    const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
+    if (sourceDoc && validMasterOrNull(sourceDoc)) {
+      state.master = sourceDoc;
+    }
+    resetOutputs();
+    loadSettings();
+    refreshPreview(false);
+  }
+
+  async function uploadPsd() {
+    if (masterNeedsTemplate()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
+    let file;
+    try {
+      file = await localFileSystem.getFileForOpening({ types: ["psd", "psb"] });
+    } catch (error) {
+      await app.showAlert(`無法選擇檔案：${error.message || error}`);
+      return;
+    }
+    if (!file) {
+      return;
+    }
+    try {
+      const doc = await openPsdAsMaster(file);
+      requireMcdSmartLayers(getMcdSourceContainer(doc));
+      state.master = doc;
+      const existing = findTemplateIndexIn(templates(), doc);
+      if (existing >= 0) {
+        state.draft = null;
+        state.templateIndex = existing;
+        templateNameInput.value = "";
+        templateNameInput.classList.remove("is-suggested");
+        resetOutputs();
+        renderAll();
+        setStatus(`${doc.name} 已有套圖模組「${templates()[existing].name}」。`);
+      } else {
+        suggestTemplate(doc);
+      }
+      await refreshPreview(false);
+    } catch (error) {
+      await app.showAlert(error.message || String(error));
+    }
+  }
+
+  async function addTemplate() {
+    const name = templateNameInput.value.trim();
+    if (!name) {
+      templateNameInput.classList.add("is-invalid");
+      setStatus("請輸入模組名稱。");
+      return;
+    }
+    if (templates().some((template) => template.name === name)) {
+      templateNameInput.classList.add("is-invalid");
+      setStatus(`模組「${name}」已存在。`);
+      return;
+    }
+    if (!isDocumentOpen(state.master)) {
+      setStatus("請先按「上傳.psd」選擇母版。");
+      return;
+    }
+    commitSettings();
+    const draft = state.draft && state.draft.draftFor === state.master.id ? state.draft : null;
+    templates().push({
+      name,
+      source: { fileName: state.master.name, path: readDocumentPath(state.master) },
+      layers: draft ? draft.layers : [],
+      srcPath: draft ? draft.srcPath : "",
+    });
+    state.draft = null;
+    state.templateIndex = templates().length - 1;
+    templateNameInput.value = "";
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
+    renderAll();
+    await persist(`已新增套圖模組「${name}」`, "成功新增模組");
+  }
+
+  const templateManager = createListManager(
+    {
+      prefix: "template-manager",
+      title: "編輯套圖模組",
+      emptyLabel: "（未命名模組）",
+      listItems: () => templates(),
+      getName: (template) => template.name,
+      setName: (template, name) => {
+        template.name = name;
+      },
+      isSameName: (a, b) => a === b,
+      remove: (template) => {
+        const index = templates().indexOf(template);
+        if (index < 0) {
+          return;
+        }
+        templates().splice(index, 1);
+        if (state.templateIndex > index || state.templateIndex >= templates().length) {
+          state.templateIndex = Math.max(state.templateIndex - 1, 0);
+        }
+      },
+      afterChange: renderAll,
+      deletedMessage: (template) => `已刪除套圖模組「${template.name}」`,
+    },
+    { el, beforeOpen: commitSettings, persist },
+  );
+
+  // ----- 圖檔資料夾與預覽套圖 -----
+
+  async function pickSrcFolder() {
+    let folder;
+    try {
+      folder = await localFileSystem.getFolder();
+    } catch (error) {
+      await app.showAlert(`無法選擇資料夾：${error.message || error}`);
+      return;
+    }
+    if (!folder) {
+      return;
+    }
+    const path = folder.nativePath;
+    try {
+      rememberSrcFolder(path, await localFileSystem.createPersistentToken(folder));
+    } catch (_error) {
+      // 無法記住授權，下次需要再選一次
+    }
+    srcInput.value = path;
+    commitSettings();
+    resetOutputs();
+    renderPreview();
+  }
+
+  async function buildSets() {
+    const template = currentTemplate();
+    const layers = template ? template.layers : [];
+    if (!layers.length) {
+      await app.showAlert("請先在「圖層」勾選要套圖的圖層。");
+      return null;
+    }
+    if (!template.srcPath) {
+      await app.showAlert("請輸入圖檔 src 或按「選擇資料夾」。");
+      return null;
+    }
+    const folder = await resolveSrcFolder(template.srcPath);
+    if (!folder) {
+      await app.showAlert("找不到圖檔資料夾（或 Photoshop 不允許直接讀取這個路徑），請按「選擇資料夾」選一次。");
+      return null;
+    }
+    const { sets, perLayer } = await collectApplySets(folder, layers);
+    const summary = layers
+      .map((name) => `${name} ${perLayer[name].length} 張`)
+      .join("、");
+    if (!sets.length) {
+      await app.showAlert(`資料夾裡找不到圖檔（${summary}）。子資料夾名稱需為圖層名去掉 $，例如 PROD、CTA。`);
+      return null;
+    }
+    return { sets, summary };
+  }
+
+  async function previewApply() {
+    commitSettings();
+    const result = await buildSets();
+    if (!result) {
+      return;
+    }
+    state.sets = result.sets;
+    state.outputIndex = 1;
+    renderOutputPicker();
+    renderPreview();
+    setStatus(`找到 ${result.sets.length} 組（${result.summary}）`);
+  }
+
+  // ----- 事件 -----
+
+  templatePicker.addEventListener("change", (event) => {
+    selectTemplate(readPickerIndex(event) - pickerOffset());
+  });
+  outputPicker.addEventListener("change", (event) => {
+    state.outputIndex = readPickerIndex(event);
+    renderPreview();
+  });
+  templateNameInput.addEventListener("input", () => {
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
+  });
+
+  // 圖層下拉：點按鈕展開勾選清單，點外面收起
+  layerToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    layerPanel.style.display = layerPanel.style.display === "block" ? "none" : "block";
+  });
+  layerPanel.addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", () => {
+    layerPanel.style.display = "none";
+  });
+  layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
+    box.addEventListener("change", () => {
+      updateLayerToggleLabel();
+      commitSettings();
+      resetOutputs();
+      renderPreview();
+    });
+  });
+  srcInput.addEventListener("change", () => {
+    commitSettings();
+    resetOutputs();
+    renderPreview();
+  });
+
+  el("btn-upload-psd").addEventListener("click", uploadPsd);
+  el("btn-add-template").addEventListener("click", addTemplate);
+  el("btn-manage-templates").addEventListener("click", () => templateManager.open());
+  el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
+  el("btn-pick-src").addEventListener("click", pickSrcFolder);
+  el("btn-preview-apply").addEventListener("click", previewApply);
+
+  el("btn-save-setting").addEventListener("click", async () => {
+    commitSettings();
+    if (isDraftSelected()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
+    await persist("已儲存套圖設定", "成功儲存設定值");
+  });
+
+  el("btn-start-generate").addEventListener("click", async () => {
+    commitSettings();
+    if (isDraftSelected()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
+    if (!state.sets.length) {
+      const result = await buildSets();
+      if (!result) {
+        return;
+      }
+      state.sets = result.sets;
+      state.outputIndex = 1;
+      renderOutputPicker();
+      renderPreview();
+    }
+    if (!(await persist("設定已儲存"))) {
+      return;
+    }
+    try {
+      const done = await whilePhotoshopBusy(() => generateApplyDocuments(state.master, state.sets));
+      if (done) {
+        setStatus(`已產出 ${done} 個套圖檔案`);
+        await showToast(`已產出 ${done} 個套圖檔案`);
+      }
+    } catch (error) {
+      await app.showAlert(`套圖產製失敗：${error.message || error}`);
+    }
+  });
+
+  el("btn-cancel-settings").addEventListener("click", () => {
+    closeResizeSettingsPanel();
+  });
+
+  window.addEventListener("resize", () => {
+    if (root.style.display !== "none") {
+      renderPreview();
+    }
+  });
+
+  onModuleStoreChanged((source) => {
+    if (source === workspace) {
+      return;
+    }
+    renderAll();
+  });
+
+  // ----- 對外 -----
+
+  function open(master, note) {
+    if (!master || !state.master || master.id !== state.master.id) {
+      state.previewCache = null;
+    }
+    state.master = master;
+    state.draft = null;
+    const existing = master ? findTemplateIndexIn(templates(), master) : -1;
+    state.templateIndex = Math.max(existing, 0);
+    templateNameInput.value = "";
+    templateNameInput.classList.remove("is-invalid", "is-suggested");
+    resetOutputs();
+    renderAll();
+    setStatus(note || "");
+    if (master && existing < 0) {
+      suggestTemplate(master);
+    }
+  }
+
+  function show() {
+    if (!isDocumentOpen(state.master)) {
+      state.master = validMasterOrNull(app.activeDocument);
+    }
+    if (!state.master) {
+      return;
+    }
+    refreshPreview(false);
+  }
+
+  return workspace;
+}
+
 // ---------- 分頁與面板 ----------
 
-const workspaces = {};
-document.querySelectorAll("[data-workspace]").forEach((root) => {
-  workspaces[root.getAttribute("data-workspace")] = createResizeWorkspace(root);
-});
+const workspaces = {
+  resize: createResizeWorkspace(document.querySelector('[data-workspace="resize"]')),
+  apply: createApplyWorkspace(document.querySelector('[data-workspace="apply"]')),
+};
 let activeTab = "resize";
 
 function selectTab(name) {
@@ -3715,7 +4530,21 @@ function parseModuleJsonText(text) {
     names.add(template.name);
     return template;
   });
-  return { templates, reference: normalizeReference(data.reference) };
+  const applyNames = new Set();
+  const applyTemplates = (Array.isArray(data.applyTemplates) ? data.applyTemplates : []).map(
+    (raw, index) => {
+      const template = normalizeApplyTemplate(raw);
+      if (!template || !template.name) {
+        throw new Error(`applyTemplates 第 ${index + 1} 個模組缺少 name`);
+      }
+      if (applyNames.has(template.name)) {
+        throw new Error(`套圖模組名稱重複：${template.name}`);
+      }
+      applyNames.add(template.name);
+      return template;
+    },
+  );
+  return { templates, applyTemplates, reference: normalizeReference(data.reference) };
 }
 
 const jsonEditor = {
@@ -3773,13 +4602,19 @@ document.getElementById("btn-json-confirm-ok").addEventListener("click", async (
   if (!pending) {
     return;
   }
-  const previous = { templates: moduleStore.templates, reference: moduleStore.reference };
+  const previous = {
+    templates: moduleStore.templates,
+    applyTemplates: moduleStore.applyTemplates,
+    reference: moduleStore.reference,
+  };
   moduleStore.templates = pending.templates;
+  moduleStore.applyTemplates = pending.applyTemplates;
   moduleStore.reference = pending.reference;
   try {
     await saveModuleStore();
   } catch (error) {
     moduleStore.templates = previous.templates;
+    moduleStore.applyTemplates = previous.applyTemplates;
     moduleStore.reference = previous.reference;
     jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
     showJsonEditorView(false);
