@@ -1474,6 +1474,7 @@ const moduleStore = {
   ready: false,
   folder: null,
   templates: [],
+  reference: null,
   listeners: [],
 };
 
@@ -1537,7 +1538,33 @@ async function readModuleFile(folder) {
   }
   // 解析失敗直接丟錯，不以預設值覆寫使用者的檔案
   const data = JSON.parse(await file.read());
-  return Array.isArray(data && data.templates) ? data.templates : [];
+  return {
+    templates: Array.isArray(data && data.templates) ? data.templates : [],
+    reference: normalizeReference(data && data.reference),
+  };
+}
+
+function moduleFileContent() {
+  const content = { templates: moduleStore.templates };
+  if (moduleStore.reference) {
+    content.reference = moduleStore.reference;
+  }
+  return content;
+}
+
+function normalizeReference(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const out = { fileName: String(raw.fileName || DEFAULT_REFERENCE_FILE) };
+  const widths = raw.widths;
+  if (widths && MCD_POSITION_ELEMENT_NAMES.every((name) => Number(widths[name]) > 0)) {
+    out.widths = {};
+    MCD_POSITION_ELEMENT_NAMES.forEach((name) => {
+      out.widths[name] = Number(widths[name]);
+    });
+  }
+  return out;
 }
 
 async function saveModuleStore() {
@@ -1551,15 +1578,14 @@ async function saveModuleStore() {
   const file = await moduleStore.folder.createFile(MODULE_FILE_NAME, {
     overwrite: true,
   });
-  await file.write(
-    JSON.stringify({ templates: moduleStore.templates }, null, 2),
-  );
+  await file.write(JSON.stringify(moduleFileContent(), null, 2));
 }
 
 async function loadModuleStore(folder) {
   const raw = await readModuleFile(folder);
   moduleStore.folder = folder;
-  moduleStore.templates = (raw || []).map(normalizeTemplate).filter(Boolean);
+  moduleStore.templates = ((raw && raw.templates) || []).map(normalizeTemplate).filter(Boolean);
+  moduleStore.reference = raw ? raw.reference : null;
   if (!moduleStore.templates.length) {
     moduleStore.templates.push(await createBuiltinTemplate());
     await saveModuleStore();
@@ -1829,43 +1855,82 @@ function suggestTemplateName(doc) {
   return `${stripExtension(doc.name)}-${formatTimestamp()}`;
 }
 
-/**
- * 依母版原稿換算各圖層在輸出畫布上的寬度%：
- * 整張原稿等比放進輸出畫布（contain），所有圖層用同一個倍率，
- *   倍率     s = min(輸出寬 ÷ 原稿寬, 輸出高 ÷ 原稿高)
- *   寬度%    = 圖層寬 × s ÷ 輸出寬 × 100
- * 圖層之間的大小比例和原稿一致；原稿以含齊圖層的工作區域（或整份文件）為準。
- */
-function measurePsdWidthPercents(master, outputWidth, outputHeight) {
+// ---------- 比例基準：內建樣板是依 MCD-SMART.psd 設計的 ----------
+//
+// 其他 PSD 的圖層寬度依「和基準 PSD 同名圖層的相對大小」換算：
+//   新寬度% = 內建寬度% × (新 PSD 圖層寬 ÷ 新 PSD 畫布寬) ÷ (基準圖層寬 ÷ 基準畫布寬)
+// 基準 PSD 自己換算倍率為 1，數值與內建完全相同；位置（靠左%、靠上%）一律沿用內建。
+// 基準的量測結果存在 module.json 的 "reference"，可用「編輯」改 fileName 換基準。
+const DEFAULT_REFERENCE_FILE = "MCD-SMART.psd";
+
+// 各圖層寬度佔原稿畫布寬的比例（畫布＝含齊圖層的工作區域，或整份文件）
+function measureRelativeWidths(master) {
   const container = getMcdSourceContainer(master);
   const layers = requireMcdSmartLayers(container);
   const frame =
     container === master
-      ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+      ? { left: 0, right: unitNumber(master.width) }
       : readLayerBounds(container);
   const frameW = Math.max(frame.right - frame.left, 1);
-  const frameH = Math.max(frame.bottom - frame.top, 1);
-  const scale = Math.min(outputWidth / frameW, outputHeight / frameH);
-
   const out = {};
   for (const name of MCD_POSITION_ELEMENT_NAMES) {
     const b = readLayerBounds(layers[name]);
-    const width = Math.max(b.right - b.left, 1);
-    out[name] = roundTo(((width * scale) / outputWidth) * 100, 2);
+    out[name] = Math.max(b.right - b.left, 1) / frameW;
   }
   return out;
 }
 
-// 範本的位置（靠左%、靠上%）與層級保留；寬度改成 PSD 原稿比例，高度不限，$BG 回到自動鋪滿
-function applyPsdWidths(values, widths) {
-  for (const variant of values.variants) {
-    for (const name of MCD_POSITION_ELEMENT_NAMES) {
-      const spec = variant.elements[name];
-      spec.widthPercent = widths[name];
-      delete spec.heightPercent;
-    }
-    delete variant.elements.$BG;
+function referenceFileName() {
+  return (moduleStore.reference && moduleStore.reference.fileName) || DEFAULT_REFERENCE_FILE;
+}
+
+function isReferenceDocument(doc) {
+  return Boolean(doc) && stripExtension(doc.name) === stripExtension(referenceFileName());
+}
+
+// 基準 PSD 開啟時量一次並存起來（之後不必再開基準 PSD 也能換算）
+async function captureReferenceIfNeeded(doc) {
+  const reference = moduleStore.reference;
+  if (!isReferenceDocument(doc) || (reference && reference.widths)) {
+    return;
   }
+  try {
+    moduleStore.reference = { fileName: referenceFileName(), widths: measureRelativeWidths(doc) };
+    await saveModuleStore();
+  } catch (_error) {
+    // 量不到就維持沒有基準，換算時退回內建數值
+  }
+}
+
+// 依基準換算元件寬度；沒有基準或本身就是基準 PSD 時原樣回傳
+function scaleElementsForDocument(elements, doc) {
+  const reference = moduleStore.reference;
+  if (!doc || !reference || !reference.widths || isReferenceDocument(doc)) {
+    return elements;
+  }
+  let widths;
+  try {
+    widths = measureRelativeWidths(doc);
+  } catch (_error) {
+    return elements;
+  }
+  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    const base = reference.widths[name];
+    if (elements[name] && base > 0) {
+      elements[name].widthPercent = roundTo(
+        Math.min(elements[name].widthPercent * (widths[name] / base), 100),
+        2,
+      );
+      delete elements[name].heightPercent;
+    }
+  }
+  return elements;
+}
+
+// 新模組（或草稿）的數值：內建樣板，寬度依基準換算
+function initialValuesForDocument(doc) {
+  const values = deepClone(BUILTIN_RESIZE_VALUES);
+  values.variants.forEach((variant) => scaleElementsForDocument(variant.elements, doc));
   return values;
 }
 
@@ -2289,8 +2354,6 @@ function createResizeWorkspace(root) {
   const variantPicker = el("variant-picker");
   const elementPicker = el("element-picker");
   const templateNameInput = el("template-name");
-  const basePicker = el("base-template-picker");
-  const sizeFromPsdCheckbox = el("size-from-psd");
   const variantNameInput = el("variant-name");
 
   const state = {
@@ -2308,8 +2371,16 @@ function createResizeWorkspace(root) {
 
   // ----- 目前選取 -----
 
+  // templateIndex = -1 代表「尚未新增」的草稿模組（還沒按「新增」的 PSD）
   function currentTemplate() {
+    if (state.templateIndex < 0) {
+      return state.draft;
+    }
     return moduleStore.templates[state.templateIndex] || null;
+  }
+
+  function isDraftSelected() {
+    return state.templateIndex < 0 && Boolean(state.draft);
   }
 
   function currentVariant() {
@@ -2362,9 +2433,11 @@ function createResizeWorkspace(root) {
 
   function clampSelection() {
     const count = moduleStore.templates.length;
-    state.templateIndex = count
-      ? Math.min(Math.max(state.templateIndex, 0), count - 1)
-      : 0;
+    if (!(state.templateIndex < 0 && state.draft)) {
+      state.templateIndex = count
+        ? Math.min(Math.max(state.templateIndex, 0), count - 1)
+        : 0;
+    }
     const template = currentTemplate();
     if (template && !template.values.variants.length) {
       // 沒有任何版型時先放一個未命名草稿，讓使用者可以直接拖拉再命名
@@ -2474,21 +2547,19 @@ function createResizeWorkspace(root) {
 
   // ----- 下拉選單 -----
 
-  function renderTemplatePicker() {
-    const names = moduleStore.templates.map((template) => template.name || "（未命名模組）");
-    fillPicker(templatePicker, names);
-    if (moduleStore.templates.length) {
-      setPickerIndex(templatePicker, state.templateIndex);
-    }
-    // 新增模組的範本：第 0 項是程式內建的原始數值，其後是各模組；預設跟著目前選的模組
-    fillPicker(basePicker, ["內建預設（原始數值）", ...names]);
-    updateTemplateHint();
-    setPickerIndex(basePicker, moduleStore.templates.length ? state.templateIndex + 1 : 0);
+  // 有草稿時下拉第 0 項是「（未新增）」草稿，其後才是各模組
+  function pickerOffset() {
+    return state.draft ? 1 : 0;
   }
 
-  function selectedBaseTemplate() {
-    const index = basePicker.selectedIndex;
-    return index > 0 ? moduleStore.templates[index - 1] || null : null;
+  function renderTemplatePicker() {
+    const names = moduleStore.templates.map((template) => template.name || "（未命名模組）");
+    const labels = state.draft ? [state.draft.label, ...names] : names;
+    fillPicker(templatePicker, labels);
+    if (labels.length) {
+      setPickerIndex(templatePicker, state.templateIndex + pickerOffset());
+    }
+    updateTemplateHint();
   }
 
   function renderVariantPicker() {
@@ -2992,7 +3063,6 @@ function createResizeWorkspace(root) {
   function selectTemplate(index) {
     commitFields();
     state.templateIndex = index;
-    setPickerIndex(basePicker, index + 1);
     state.variantIndex = 0;
     clampSelection();
 
@@ -3029,10 +3099,12 @@ function createResizeWorkspace(root) {
       const doc = await openPsdAsMaster(file);
       requireMcdSmartLayers(getMcdSourceContainer(doc));
       state.master = doc;
+      await captureReferenceIfNeeded(doc);
       const existing = findTemplateIndexForDocument(doc);
       if (existing >= 0) {
         templateNameInput.value = "";
         templateNameInput.classList.remove("is-suggested");
+        state.draft = null;
         state.templateIndex = existing;
         state.variantIndex = 0;
         renderAll();
@@ -3065,18 +3137,11 @@ function createResizeWorkspace(root) {
     }
 
     commitFields();
-    // 以選定的範本（某個模組，或程式內建原始值）為基礎；勾選時寬度改依 PSD 原稿比例
-    const base = selectedBaseTemplate();
-    const values = deepClone(base ? base.values : BUILTIN_RESIZE_VALUES);
-    const sizeFromPsd = sizeFromPsdCheckbox.checked;
-    if (sizeFromPsd) {
-      try {
-        applyPsdWidths(values, measurePsdWidthPercents(state.master, values.width, values.height));
-      } catch (error) {
-        await app.showAlert(`無法讀取 PSD 圖層大小：${error.message || error}`);
-        return;
-      }
-    }
+    // 有這份 PSD 的草稿就照畫面上的草稿存；否則用內建樣板、寬度依基準換算
+    const draft = state.draft && state.draft.draftFor === state.master.id ? state.draft : null;
+    const values = draft ? draft.values : initialValuesForDocument(state.master);
+    const variantIndex = draft && isDraftSelected() ? state.variantIndex : 0;
+    state.draft = null;
     moduleStore.templates.push({
       name,
       source: {
@@ -3085,17 +3150,13 @@ function createResizeWorkspace(root) {
       },
       values,
     });
-    const baseLabel = base ? base.name : "內建預設";
     state.templateIndex = moduleStore.templates.length - 1;
-    state.variantIndex = 0;
+    state.variantIndex = variantIndex;
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
 
     renderAll();
-    await persist(
-      `已新增模組「${name}」（範本：${baseLabel}${sizeFromPsd ? "，寬度依 PSD 原稿比例" : ""}）`,
-      "成功新增模組",
-    );
+    await persist(`已新增模組「${name}」`, "成功新增模組");
   }
 
   // ----- 版型（variant / outputDocument）-----
@@ -3141,18 +3202,17 @@ function createResizeWorkspace(root) {
   }
 
   function defaultElementsFor(template, variant) {
-    // 與內建樣板同名就還原成程式內建的原始數值，其餘還原成置中預設值
-    for (const values of [BUILTIN_RESIZE_VALUES]) {
-      const match = values.variants.find((item) =>
-        isSameVariantName(item.outputDocument, variant.outputDocument || ""),
-      );
-      if (match) {
-        const elements = deepClone(match.elements);
-        delete elements.$BG;
-        return elements;
-      }
+    // 與內建樣板同名就還原成內建數值（寬度依基準換算成這份 PSD 的比例），其餘還原成置中預設值
+    const match = BUILTIN_RESIZE_VALUES.variants.find((item) =>
+      isSameVariantName(item.outputDocument, variant.outputDocument || ""),
+    );
+    if (!match) {
+      return deepClone(DEFAULT_VARIANT_ELEMENTS);
     }
-    return deepClone(DEFAULT_VARIANT_ELEMENTS);
+    const elements = deepClone(match.elements);
+    delete elements.$BG;
+    const doc = template === state.draft ? state.master : findOpenDocumentForTemplate(template);
+    return template.builtin ? elements : scaleElementsForDocument(elements, doc);
   }
 
   async function resetVariant() {
@@ -3413,7 +3473,7 @@ function createResizeWorkspace(root) {
   }
 
   templatePicker.addEventListener("change", (event) => {
-    selectTemplate(readPickerIndex(event));
+    selectTemplate(readPickerIndex(event) - pickerOffset());
   });
 
   variantPicker.addEventListener("change", (event) => {
@@ -3471,6 +3531,10 @@ function createResizeWorkspace(root) {
 
   el("btn-save-setting").addEventListener("click", async () => {
     commitFields();
+    if (isDraftSelected()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
     await persist(
       `已儲存 ${variantLabel(currentVariant())} 的設定值`,
       "成功儲存設定值",
@@ -3511,17 +3575,34 @@ function createResizeWorkspace(root) {
     if (source === workspace) {
       return;
     }
+    // 另一個分頁已替這份 PSD 新增模組：草稿換成該模組
+    const registered = state.draft ? findTemplateIndexForDocument(state.master) : -1;
+    if (registered >= 0) {
+      state.draft = null;
+      state.templateIndex = registered;
+      templateNameInput.value = "";
+      templateNameInput.classList.remove("is-suggested");
+    }
     renderAll();
   });
 
   // ----- 對外 -----
 
   function suggestTemplate(doc) {
-    // 尚未建立模組的 PSD：帶入「檔名-時間」，使用者確認後按「新增」
-    templateNameInput.value = suggestTemplateName(doc);
+    // 尚未建立模組的 PSD：帶入「檔名-時間」，並建立草稿讓預覽立刻套用這份 PSD 的大小
+    const name = suggestTemplateName(doc);
+    state.draft = {
+      name,
+      label: `${stripExtension(doc.name)}（未新增）`,
+      draftFor: doc.id,
+      values: initialValuesForDocument(doc),
+    };
+    state.templateIndex = -1;
+    state.variantIndex = 0;
+    renderAll();
+    templateNameInput.value = name;
     templateNameInput.classList.add("is-suggested");
-    setStatus(`${doc.name} 尚未建立模組，確認名稱後按「新增」。`);
-    updateTemplateHint();
+    setStatus(`${doc.name} 尚未建立模組，可先調整，確認名稱後按「新增」。`);
   }
 
   // 目前母版還沒建立模組（還沒按「新增」）
@@ -3543,6 +3624,7 @@ function createResizeWorkspace(root) {
     }
     state.master = master;
     const existing = master ? findTemplateIndexForDocument(master) : -1;
+    state.draft = null;
     state.templateIndex = Math.max(existing, 0);
     state.variantIndex = 0;
     state.elementName = MCD_POSITION_ELEMENT_NAMES[0];
@@ -3622,7 +3704,7 @@ function parseModuleJsonText(text) {
     throw new Error("最外層需為 { \"templates\": [ ... ] }");
   }
   const names = new Set();
-  return data.templates.map((raw, index) => {
+  const templates = data.templates.map((raw, index) => {
     const template = normalizeTemplate(raw);
     if (!template || !template.name) {
       throw new Error(`第 ${index + 1} 個模組缺少 name`);
@@ -3633,6 +3715,7 @@ function parseModuleJsonText(text) {
     names.add(template.name);
     return template;
   });
+  return { templates, reference: normalizeReference(data.reference) };
 }
 
 const jsonEditor = {
@@ -3653,7 +3736,7 @@ async function openJsonEditor() {
   await ensureModuleStore();
   // 面板上尚未寫回的欄位先寫進資料，編輯視窗才會看到最新數值
   Object.keys(workspaces).forEach((key) => workspaces[key].commit());
-  jsonEditor.text.value = JSON.stringify({ templates: moduleStore.templates }, null, 2);
+  jsonEditor.text.value = JSON.stringify(moduleFileContent(), null, 2);
   jsonEditor.error.textContent = "";
   jsonEditor.pending = null;
   showJsonEditorView(false);
@@ -3686,16 +3769,18 @@ document.getElementById("btn-json-confirm-cancel").addEventListener("click", () 
 });
 
 document.getElementById("btn-json-confirm-ok").addEventListener("click", async () => {
-  const templates = jsonEditor.pending;
-  if (!templates) {
+  const pending = jsonEditor.pending;
+  if (!pending) {
     return;
   }
-  const previous = moduleStore.templates;
-  moduleStore.templates = templates;
+  const previous = { templates: moduleStore.templates, reference: moduleStore.reference };
+  moduleStore.templates = pending.templates;
+  moduleStore.reference = pending.reference;
   try {
     await saveModuleStore();
   } catch (error) {
-    moduleStore.templates = previous;
+    moduleStore.templates = previous.templates;
+    moduleStore.reference = previous.reference;
     jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
     showJsonEditorView(false);
     return;
@@ -3720,6 +3805,9 @@ async function openResizeSettingsPanel() {
     }
   }
 
+  if (master) {
+    await captureReferenceIfNeeded(master);
+  }
   Object.keys(workspaces).forEach((key) => {
     workspaces[key].open(master, note);
   });
