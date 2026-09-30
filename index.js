@@ -1476,6 +1476,8 @@ const moduleStore = {
   templates: [],
   // 套圖分頁的模組，與 Resize 的 templates 分開
   applyTemplates: [],
+  // 套圖時 PSD 必須有的圖層（「必選」視窗）；未設定時六個都必須
+  applyRequiredLayers: MCD_SMART_LAYER_NAMES.slice(),
   reference: null,
   listeners: [],
 };
@@ -1543,6 +1545,7 @@ async function readModuleFile(folder) {
   return {
     templates: Array.isArray(data && data.templates) ? data.templates : [],
     applyTemplates: Array.isArray(data && data.applyTemplates) ? data.applyTemplates : [],
+    applyRequiredLayers: normalizeRequiredLayers(data && data.applyRequiredLayers),
     reference: normalizeReference(data && data.reference),
   };
 }
@@ -1551,6 +1554,7 @@ function moduleFileContent() {
   const content = {
     templates: moduleStore.templates,
     applyTemplates: moduleStore.applyTemplates,
+    applyRequiredLayers: moduleStore.applyRequiredLayers,
   };
   if (moduleStore.reference) {
     content.reference = moduleStore.reference;
@@ -1595,6 +1599,9 @@ async function loadModuleStore(folder) {
   moduleStore.applyTemplates = ((raw && raw.applyTemplates) || [])
     .map(normalizeApplyTemplate)
     .filter((template) => template && template.name);
+  moduleStore.applyRequiredLayers = raw
+    ? raw.applyRequiredLayers
+    : MCD_SMART_LAYER_NAMES.slice();
   if (!moduleStore.templates.length) {
     moduleStore.templates.push(await createBuiltinTemplate());
     await saveModuleStore();
@@ -1657,15 +1664,16 @@ function findNamedLayer(container, name) {
   );
 }
 
-function requireMcdSmartLayers(container) {
+// 回傳找得到的 $ 圖層；required 內的圖層缺少時丟錯（Resize 需要全部六個，套圖依「必選」設定）
+function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES) {
   const layers = {};
   const missing = [];
   for (const name of MCD_SMART_LAYER_NAMES) {
     const layer = findNamedLayer(container, name);
-    if (!layer) {
-      missing.push(name);
-    } else {
+    if (layer) {
       layers[name] = layer;
+    } else if (required.includes(name)) {
+      missing.push(name);
     }
   }
   if (missing.length) {
@@ -1674,11 +1682,11 @@ function requireMcdSmartLayers(container) {
   return layers;
 }
 
-function getMcdSourceContainer(doc) {
+function getMcdSourceContainer(doc, required = MCD_SMART_LAYER_NAMES) {
   const boards = listArtboards(doc);
   for (const board of boards) {
     try {
-      requireMcdSmartLayers(board);
+      requireMcdSmartLayers(board, required);
       return board;
     } catch (_error) {
       // 不完整的工作區域略過，改找下一層或整份文件
@@ -1688,9 +1696,8 @@ function getMcdSourceContainer(doc) {
 }
 
 function listMcdLayersBottomToTop(container, sourceLayers) {
-  const wantedIds = new Set(
-    MCD_SMART_LAYER_NAMES.map((name) => sourceLayers[name].id),
-  );
+  const names = Object.keys(sourceLayers);
+  const wantedIds = new Set(names.map((name) => sourceLayers[name].id));
   const topToBottom = [];
 
   function walk(node) {
@@ -1707,7 +1714,7 @@ function listMcdLayersBottomToTop(container, sourceLayers) {
   walk(container);
 
   const foundIds = new Set(topToBottom.map((layer) => layer.id));
-  for (const name of MCD_SMART_LAYER_NAMES) {
+  for (const name of names) {
     if (!foundIds.has(sourceLayers[name].id)) {
       topToBottom.push(sourceLayers[name]);
     }
@@ -2206,12 +2213,12 @@ function closeLeftoverPreviewDocuments() {
   );
 }
 
-async function buildPreviewCache(master) {
-  const sourceContainer = getMcdSourceContainer(master);
-  const sourceLayers = requireMcdSmartLayers(sourceContainer);
-  const order = listMcdLayersBottomToTop(sourceContainer, sourceLayers).map(
-    (layer) =>
-      MCD_SMART_LAYER_NAMES.find((name) => sourceLayers[name].id === layer.id),
+async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES) {
+  const sourceContainer = getMcdSourceContainer(master, required);
+  const sourceLayers = requireMcdSmartLayers(sourceContainer, required);
+  const presentNames = Object.keys(sourceLayers);
+  const order = listMcdLayersBottomToTop(sourceContainer, sourceLayers).map((layer) =>
+    presentNames.find((name) => sourceLayers[name].id === layer.id),
   );
 
   const tempFolder = await localFileSystem.getTemporaryFolder();
@@ -2220,7 +2227,7 @@ async function buildPreviewCache(master) {
   await runModal(
     async () => {
       await closeLeftoverPreviewDocuments();
-      for (const name of MCD_SMART_LAYER_NAMES) {
+      for (const name of presentNames) {
         // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
         const file = await tempFolder.createFile(
           `preview-${master.id}-${name.replace("$", "")}.png`,
@@ -2259,11 +2266,11 @@ async function whilePhotoshopBusy(task) {
 // 兩個分頁共用同一份擷取結果，避免同一份母版重複匯出
 const previewCacheByMaster = new Map();
 
-function getPreviewCache(master, force) {
+function getPreviewCache(master, force, required) {
   if (!force && previewCacheByMaster.has(master.id)) {
     return previewCacheByMaster.get(master.id);
   }
-  const pending = whilePhotoshopBusy(() => buildPreviewCache(master)).catch((error) => {
+  const pending = whilePhotoshopBusy(() => buildPreviewCache(master, required)).catch((error) => {
     previewCacheByMaster.delete(master.id);
     throw error;
   });
@@ -3677,6 +3684,42 @@ const APPLY_LAYER_NAMES = ["$LOGO", "$PROD", "$HEAD", "$CTA", "$SM", "$BG"];
 const APPLY_IMAGE_PATTERN = /\.(jpe?g|png|psd|psb|tiff?|webp|gif|bmp)$/i;
 const SRC_FOLDER_TOKENS_KEY = "bannerResizer.srcFolderTokens";
 
+// 未設定（舊的 module.json）時六個都必須；設定過就照清單（可以是空的）
+function normalizeRequiredLayers(raw) {
+  if (!Array.isArray(raw)) {
+    return MCD_SMART_LAYER_NAMES.slice();
+  }
+  return APPLY_LAYER_NAMES.filter((name) => raw.includes(name));
+}
+
+function applyRequiredLayers() {
+  return moduleStore.applyRequiredLayers || MCD_SMART_LAYER_NAMES;
+}
+
+// 套圖用的母版檢查：只要求「必選」勾選的圖層存在
+function validApplyMasterOrNull(doc) {
+  if (!doc) {
+    return null;
+  }
+  const required = applyRequiredLayers();
+  try {
+    requireMcdSmartLayers(getMcdSourceContainer(doc, required), required);
+    return doc;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function applyMasterProblem(doc) {
+  const required = applyRequiredLayers();
+  try {
+    requireMcdSmartLayers(getMcdSourceContainer(doc, required), required);
+    return "";
+  } catch (error) {
+    return `${error.message || error}（可按「必選」調整必須有的圖層）`;
+  }
+}
+
 function normalizeApplyTemplate(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -3773,9 +3816,9 @@ async function collectApplySets(folder, layerNames) {
 }
 
 // 各圖層在原稿畫布上的位置（百分比），畫布＝含齊圖層的工作區域或整份文件
-function measureLayerFrames(master) {
-  const container = getMcdSourceContainer(master);
-  const layers = requireMcdSmartLayers(container);
+function measureLayerFrames(master, required = MCD_SMART_LAYER_NAMES) {
+  const container = getMcdSourceContainer(master, required);
+  const layers = requireMcdSmartLayers(container, required);
   const frame =
     container === master
       ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
@@ -3783,7 +3826,7 @@ function measureLayerFrames(master) {
   const width = Math.max(frame.right - frame.left, 1);
   const height = Math.max(frame.bottom - frame.top, 1);
   const frames = {};
-  for (const name of MCD_SMART_LAYER_NAMES) {
+  for (const name of Object.keys(layers)) {
     const b = readLayerBounds(layers[name]);
     frames[name] = {
       left: ((b.left - frame.left) / width) * 100,
@@ -3859,7 +3902,7 @@ async function generateApplyDocuments(master, sets) {
         const copy = await master.duplicate(stripExtension(set.name));
         app.activeDocument = copy;
         try {
-          const container = getMcdSourceContainer(copy);
+          const container = getMcdSourceContainer(copy, applyRequiredLayers());
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
             if (!layer) {
@@ -3897,6 +3940,11 @@ function createApplyWorkspace(root) {
   const layerToggle = el("layer-toggle");
   const layerPanel = el("layer-panel");
   const srcInput = el("src-path");
+  const requiredDialog = el("required-dialog");
+
+  // UXP 不支援 z-index，後出現的元素會蓋在前面：把下拉清單移到分頁最後，
+  // 打開時再依按鈕位置定位，才不會被下方的 src 輸入框等元素蓋住
+  root.appendChild(layerPanel);
 
   const state = {
     master: null,
@@ -3944,9 +3992,14 @@ function createApplyWorkspace(root) {
   function masterNeedsTemplate() {
     return (
       isDocumentOpen(state.master) &&
-      Boolean(validMasterOrNull(state.master)) &&
+      Boolean(validApplyMasterOrNull(state.master)) &&
       findTemplateIndexIn(templates(), state.master) < 0
     );
+  }
+
+  // 目前母版有的圖層（預覽量測後才知道）
+  function presentLayers() {
+    return state.frames ? Object.keys(state.frames.frames) : APPLY_LAYER_NAMES;
   }
 
   function updateTemplateHint() {
@@ -3970,8 +4023,13 @@ function createApplyWorkspace(root) {
   function loadSettings() {
     const template = currentTemplate();
     const layers = template ? template.layers : [];
+    const present = presentLayers();
     layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
-      box.checked = layers.includes(box.getAttribute("data-layer-name"));
+      const name = box.getAttribute("data-layer-name");
+      box.checked = layers.includes(name);
+      // PSD 沒有的圖層不能套圖
+      box.disabled = !present.includes(name);
+      box.parentElement.classList.toggle("is-missing", box.disabled);
     });
     srcInput.value = template ? template.srcPath : "";
     updateLayerToggleLabel();
@@ -4069,6 +4127,9 @@ function createApplyWorkspace(root) {
     const set = currentSet();
     cache.order.forEach((name) => {
       const frame = state.frames.frames[name];
+      if (!frame) {
+        return;
+      }
       const img = document.createElement("img");
       img.className = "preview-layer";
       img.style.left = `${frame.left}%`;
@@ -4101,18 +4162,19 @@ function createApplyWorkspace(root) {
       return;
     }
     try {
-      state.frames = measureLayerFrames(master);
+      state.frames = measureLayerFrames(master, applyRequiredLayers());
     } catch (error) {
-      setStatus(error.message || String(error));
+      setStatus(`${error.message || error}（可按「必選」調整必須有的圖層）`);
       return;
     }
+    loadSettings();
     if (!force && state.previewCache && state.previewCache.masterId === master.id) {
       renderPreview();
       return;
     }
     setStatus("擷取圖層中，請稍候…");
     try {
-      const cache = await getPreviewCache(master, force);
+      const cache = await getPreviewCache(master, force, applyRequiredLayers());
       if (state.master !== master) {
         return;
       }
@@ -4167,7 +4229,7 @@ function createApplyWorkspace(root) {
     state.templateIndex = index;
     clampSelection();
     const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
-    if (sourceDoc && validMasterOrNull(sourceDoc)) {
+    if (sourceDoc && validApplyMasterOrNull(sourceDoc)) {
       state.master = sourceDoc;
     }
     resetOutputs();
@@ -4192,7 +4254,10 @@ function createApplyWorkspace(root) {
     }
     try {
       const doc = await openPsdAsMaster(file);
-      requireMcdSmartLayers(getMcdSourceContainer(doc));
+      const problem = applyMasterProblem(doc);
+      if (problem) {
+        throw new Error(problem);
+      }
       state.master = doc;
       const existing = findTemplateIndexIn(templates(), doc);
       if (existing >= 0) {
@@ -4298,9 +4363,10 @@ function createApplyWorkspace(root) {
 
   async function buildSets() {
     const template = currentTemplate();
-    const layers = template ? template.layers : [];
+    const present = presentLayers();
+    const layers = template ? template.layers.filter((name) => present.includes(name)) : [];
     if (!layers.length) {
-      await app.showAlert("請先在「圖層」勾選要套圖的圖層。");
+      await app.showAlert("請先在「圖層」勾選要套圖的圖層（PSD 裡要有這個圖層）。");
       return null;
     }
     if (!template.srcPath) {
@@ -4336,11 +4402,40 @@ function createApplyWorkspace(root) {
     setStatus(`找到 ${result.sets.length} 組（${result.summary}）`);
   }
 
+  // ----- 必選：PSD 必須有哪些圖層（沒勾的可以不存在）-----
+
+  async function openRequiredDialog() {
+    const required = applyRequiredLayers();
+    requiredDialog.querySelectorAll("[data-required-name]").forEach((box) => {
+      box.checked = required.includes(box.getAttribute("data-required-name"));
+    });
+    if (!(await showDialog(requiredDialog, "必選圖層"))) {
+      return;
+    }
+    moduleStore.applyRequiredLayers = APPLY_LAYER_NAMES.filter((name) => {
+      const box = requiredDialog.querySelector(`[data-required-name="${name}"]`);
+      return box && box.checked;
+    });
+    await persist("已儲存必選圖層", "已儲存必選圖層");
+    // 用新的必選條件重新檢查：目前的母版、或 Photoshop 作用中的文件
+    const candidate = isDocumentOpen(state.master) ? state.master : app.activeDocument;
+    const doc = validApplyMasterOrNull(candidate);
+    if (doc) {
+      open(doc, "");
+      refreshPreview(true);
+    } else if (candidate) {
+      setStatus(applyMasterProblem(candidate));
+    }
+  }
+
   // ----- 事件 -----
 
   templatePicker.addEventListener("change", (event) => {
     selectTemplate(readPickerIndex(event) - pickerOffset());
   });
+  el("btn-required").addEventListener("click", openRequiredDialog);
+  el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
+  el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
   outputPicker.addEventListener("change", (event) => {
     state.outputIndex = readPickerIndex(event);
     renderPreview();
@@ -4352,7 +4447,16 @@ function createApplyWorkspace(root) {
   // 圖層下拉：點按鈕展開勾選清單，點外面收起
   layerToggle.addEventListener("click", (event) => {
     event.stopPropagation();
-    layerPanel.style.display = layerPanel.style.display === "block" ? "none" : "block";
+    if (layerPanel.style.display === "block") {
+      layerPanel.style.display = "none";
+      return;
+    }
+    const rootRect = root.getBoundingClientRect();
+    const rect = layerToggle.getBoundingClientRect();
+    layerPanel.style.left = `${rect.left - rootRect.left}px`;
+    layerPanel.style.top = `${rect.bottom - rootRect.top + 2}px`;
+    layerPanel.style.width = `${rect.width}px`;
+    layerPanel.style.display = "block";
   });
   layerPanel.addEventListener("click", (event) => event.stopPropagation());
   document.addEventListener("click", () => {
@@ -4440,6 +4544,7 @@ function createApplyWorkspace(root) {
   function open(master, note) {
     if (!master || !state.master || master.id !== state.master.id) {
       state.previewCache = null;
+      state.frames = null;
     }
     state.master = master;
     state.draft = null;
@@ -4457,7 +4562,7 @@ function createApplyWorkspace(root) {
 
   function show() {
     if (!isDocumentOpen(state.master)) {
-      state.master = validMasterOrNull(app.activeDocument);
+      state.master = validApplyMasterOrNull(app.activeDocument);
     }
     if (!state.master) {
       return;
@@ -4544,7 +4649,12 @@ function parseModuleJsonText(text) {
       return template;
     },
   );
-  return { templates, applyTemplates, reference: normalizeReference(data.reference) };
+  return {
+    templates,
+    applyTemplates,
+    applyRequiredLayers: normalizeRequiredLayers(data.applyRequiredLayers),
+    reference: normalizeReference(data.reference),
+  };
 }
 
 const jsonEditor = {
@@ -4605,16 +4715,19 @@ document.getElementById("btn-json-confirm-ok").addEventListener("click", async (
   const previous = {
     templates: moduleStore.templates,
     applyTemplates: moduleStore.applyTemplates,
+    applyRequiredLayers: moduleStore.applyRequiredLayers,
     reference: moduleStore.reference,
   };
   moduleStore.templates = pending.templates;
   moduleStore.applyTemplates = pending.applyTemplates;
+  moduleStore.applyRequiredLayers = pending.applyRequiredLayers;
   moduleStore.reference = pending.reference;
   try {
     await saveModuleStore();
   } catch (error) {
     moduleStore.templates = previous.templates;
     moduleStore.applyTemplates = previous.applyTemplates;
+    moduleStore.applyRequiredLayers = previous.applyRequiredLayers;
     moduleStore.reference = previous.reference;
     jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
     showJsonEditorView(false);
@@ -4643,9 +4756,9 @@ async function openResizeSettingsPanel() {
   if (master) {
     await captureReferenceIfNeeded(master);
   }
-  Object.keys(workspaces).forEach((key) => {
-    workspaces[key].open(master, note);
-  });
+  workspaces.resize.open(master, note);
+  const applyMaster = validApplyMasterOrNull(active);
+  workspaces.apply.open(applyMaster, active && !applyMaster ? applyMasterProblem(active) : "");
   updateModuleFolderLabel();
   document.getElementById("btn-resize-1200x629").style.display = "none";
   document.getElementById("resize-settings-panel").style.display = "block";
