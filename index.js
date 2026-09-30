@@ -4242,6 +4242,22 @@ function createApplyWorkspace(root) {
     }
   }
 
+  // 診斷：預覽圖放進去 1.5 秒後，記下面板實際排出來的位置、大小與載入狀態
+  let diagnosticsTimer = null;
+  function scheduleDiagnostics() {
+    clearTimeout(diagnosticsTimer);
+    diagnosticsTimer = setTimeout(() => {
+      const images = [...stage.querySelectorAll("img")];
+      const stageRect = stage.getBoundingClientRect();
+      const parts = images.map((img) => {
+        const rect = img.getBoundingClientRect();
+        const loaded = img.complete ? `載入${img.naturalWidth || "?"}×${img.naturalHeight || "?"}` : "未載入";
+        return `${img.dataset.layer} ${img.style.left}/${img.style.top}/${img.style.width} → ${Math.round(rect.left - stageRect.left)},${Math.round(rect.top - stageRect.top)} ${Math.round(rect.width)}×${Math.round(rect.height)} ${loaded}`;
+      });
+      el("preview-debug").textContent = `診斷：預覽區 ${Math.round(stageRect.width)}×${Math.round(stageRect.height)}；${parts.join("；") || "沒有圖"}`;
+    }, 1500);
+  }
+
   function showStageMessage(text) {
     const message = document.createElement("div");
     message.className = "stage-message";
@@ -4256,10 +4272,10 @@ function createApplyWorkspace(root) {
       state.previewCache && state.master && state.previewCache.masterId === state.master.id
         ? state.previewCache
         : null;
-    if (state.frames) {
-      resizeStage();
-    }
     if (!cache || !state.frames) {
+      if (state.frames) {
+        resizeStage();
+      }
       if (state.loading) {
         showStageMessage("預覽擷取中，請稍候…");
       } else if (state.previewError) {
@@ -4278,6 +4294,7 @@ function createApplyWorkspace(root) {
       }
       shown += 1;
       const img = document.createElement("img");
+      img.dataset.layer = name;
       img.addEventListener("error", () => {
         setStatus(`${name} 的預覽圖無法顯示`);
       });
@@ -4300,6 +4317,8 @@ function createApplyWorkspace(root) {
       }
       stage.appendChild(img);
     });
+    resizeStage();
+    scheduleDiagnostics();
     if (!shown) {
       // 診斷：擷取到的圖層和 PSD 量到的圖層對不上
       showStageMessage(
@@ -4752,7 +4771,30 @@ const workspaces = {
   resize: createResizeWorkspace(document.querySelector('[data-workspace="resize"]')),
   apply: createApplyWorkspace(document.querySelector('[data-workspace="apply"]')),
 };
-let activeTab = "resize";
+const START_TAB_KEY = "bannerResizer.startTab";
+
+function readStartTab() {
+  try {
+    const saved = localStorage.getItem(START_TAB_KEY);
+    return saved === "apply" ? "apply" : "resize";
+  } catch (_error) {
+    return "resize";
+  }
+}
+
+// 啟動畫面的「Resize／套圖」選擇：決定按「開始執行」後預選哪個分頁，並記住上次的選擇
+let activeTab = readStartTab();
+const startModePicker = document.getElementById("start-mode-picker");
+fillPicker(startModePicker, ["Resize", "套圖"]);
+setPickerIndex(startModePicker, activeTab === "apply" ? 1 : 0);
+startModePicker.addEventListener("change", (event) => {
+  activeTab = readPickerIndex(event) === 1 ? "apply" : "resize";
+  try {
+    localStorage.setItem(START_TAB_KEY, activeTab);
+  } catch (_error) {
+    // 記不住就每次預設 Resize
+  }
+});
 
 function selectTab(name) {
   activeTab = name;
@@ -4934,6 +4976,7 @@ async function openResizeSettingsPanel() {
   workspaces.apply.open(applyMaster, active && !applyMaster ? applyMasterProblem(active) : "");
   updateModuleFolderLabel();
   document.getElementById("btn-resize-1200x629").style.display = "none";
+  document.getElementById("start-screen").style.display = "none";
   document.getElementById("resize-settings-panel").style.display = "block";
   selectTab(activeTab);
 }
@@ -4941,6 +4984,7 @@ async function openResizeSettingsPanel() {
 function closeResizeSettingsPanel() {
   document.getElementById("resize-settings-panel").style.display = "none";
   document.getElementById("btn-resize-1200x629").style.display = "";
+  document.getElementById("start-screen").style.display = "";
 }
 
 document.getElementById("btn-resize-1200x629").addEventListener("click", () => {
