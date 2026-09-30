@@ -3076,7 +3076,8 @@ function createResizeWorkspace(root) {
     setStatus("擷取圖層中，請稍候…");
     try {
       const cache = await getPreviewCache(master, force);
-      if (state.master !== master) {
+      // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
+      if (!state.master || state.master.id !== master.id) {
         return; // 擷取期間已切換母版
       }
       state.previewCache = cache;
@@ -4263,16 +4264,23 @@ function createApplyWorkspace(root) {
         showStageMessage("預覽擷取中，請稍候…");
       } else if (state.previewError) {
         showStageMessage(state.previewError);
+      } else if (state.master) {
+        showStageMessage("尚未擷取預覽，請按「重新擷取圖層」。");
       }
-      return;
+      return 0;
     }
     const set = currentSet();
+    let shown = 0;
     cache.order.forEach((name) => {
       const frame = state.frames.frames[name];
       if (!frame) {
         return;
       }
+      shown += 1;
       const img = document.createElement("img");
+      img.addEventListener("error", () => {
+        setStatus(`${name} 的預覽圖無法顯示`);
+      });
       img.className = "preview-layer";
       img.style.left = `${frame.left}%`;
       img.style.top = `${frame.top}%`;
@@ -4292,6 +4300,13 @@ function createApplyWorkspace(root) {
       }
       stage.appendChild(img);
     });
+    if (!shown) {
+      // 診斷：擷取到的圖層和 PSD 量到的圖層對不上
+      showStageMessage(
+        `沒有可顯示的圖層（擷取：${cache.order.join("、") || "無"}；PSD：${Object.keys(state.frames.frames).join("、") || "無"}）`,
+      );
+    }
+    return shown;
   }
 
   async function refreshPreview(force) {
@@ -4321,17 +4336,18 @@ function createApplyWorkspace(root) {
     renderPreview();
     try {
       const cache = await getPreviewCache(master, force, applyRequiredLayers());
-      if (state.master !== master) {
+      // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
+      if (!state.master || state.master.id !== master.id) {
         return;
       }
       state.previewCache = cache;
       state.loading = false;
       state.previewError = "";
-      renderPreview();
+      const shown = renderPreview();
       if (cache.failed && cache.failed.length) {
         setStatus(`部分圖層無法預覽（${cache.failed.join("；")}）`);
       } else if (!state.sets.length) {
-        setStatus(`預覽來源：${master.name}`);
+        setStatus(`預覽來源：${master.name}（顯示 ${shown} 個圖層）`);
       }
     } catch (error) {
       state.previewCache = null;
@@ -4672,6 +4688,8 @@ function createApplyWorkspace(root) {
         setStatus(`已產出 ${done} 個套圖檔案`);
         await showToast(`已產出 ${done} 個套圖檔案`);
       }
+      // 產圖期間切換過文件，回來後重畫預覽
+      refreshPreview(false);
     } catch (error) {
       await app.showAlert(`套圖產製失敗：${error.message || error}`);
     }
