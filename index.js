@@ -3861,9 +3861,84 @@ function imageMimeType(fileName) {
   return "image/jpeg";
 }
 
-async function readImageDataUrl(file) {
+/**
+ * 直接從圖檔檔頭讀寬高（JPEG / PNG / GIF / WebP / BMP）。
+ * UXP 面板裡的 <img> 不一定會觸發 load、也不一定有 naturalWidth，
+ * 所以預覽定位不依賴瀏覽器載入圖片。讀不到時回傳 null。
+ */
+function readImageSize(bytes) {
+  const u16be = (i) => (bytes[i] << 8) | bytes[i + 1];
+  const u16le = (i) => bytes[i] | (bytes[i + 1] << 8);
+  const u24le = (i) => bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16);
+  const u32be = (i) => ((bytes[i] << 24) >>> 0) + (bytes[i + 1] << 16) + (bytes[i + 2] << 8) + bytes[i + 3];
+  const ascii = (i, n) => String.fromCharCode(...bytes.slice(i, i + n));
+  if (bytes.length < 26) {
+    return null;
+  }
+  if (bytes[0] === 0x89 && ascii(1, 3) === "PNG") {
+    return { width: u32be(16), height: u32be(20) };
+  }
+  if (ascii(0, 3) === "GIF") {
+    return { width: u16le(6), height: u16le(8) };
+  }
+  if (ascii(0, 2) === "BM") {
+    const height = bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24);
+    return { width: u16le(18) + (bytes[20] << 16), height: Math.abs(height) };
+  }
+  if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
+    const chunk = ascii(12, 4);
+    if (chunk === "VP8 " && bytes.length >= 30) {
+      return { width: u16le(26) & 0x3fff, height: u16le(28) & 0x3fff };
+    }
+    if (chunk === "VP8L" && bytes.length >= 25) {
+      const b1 = bytes[22];
+      const b2 = bytes[23];
+      const b3 = bytes[24];
+      return {
+        width: 1 + (((b1 & 0x3f) << 8) | bytes[21]),
+        height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6)),
+      };
+    }
+    if (chunk === "VP8X" && bytes.length >= 30) {
+      return { width: 1 + u24le(24), height: 1 + u24le(27) };
+    }
+    return null;
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < bytes.length) {
+      if (bytes[i] !== 0xff) {
+        i += 1;
+        continue;
+      }
+      const marker = bytes[i + 1];
+      if (marker === 0xff) {
+        i += 1;
+        continue;
+      }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      // SOF0–SOF15（排除 DHT C4、JPG C8、DAC CC）記錄影像寬高
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { width: u16be(i + 7), height: u16be(i + 5) };
+      }
+      i += 2 + u16be(i + 2);
+    }
+  }
+  return null;
+}
+
+async function readImageInfo(file) {
   const buffer = await file.read({ format: formats.binary });
-  return `data:${imageMimeType(file.name)};base64,${arrayBufferToBase64(buffer)}`;
+  const bytes = new Uint8Array(buffer);
+  const size = readImageSize(bytes);
+  return {
+    url: `data:${imageMimeType(file.name)};base64,${arrayBufferToBase64(buffer)}`,
+    width: size ? size.width : 0,
+    height: size ? size.height : 0,
+  };
 }
 
 /**
@@ -4100,23 +4175,28 @@ function createApplyWorkspace(root) {
     return state.outputIndex > 0 ? state.sets[state.outputIndex - 1] || null : null;
   }
 
-  function placeContained(img, frame) {
-    // 換上的圖等比塞進原圖層的框、置中（與產出時的處理相同）
-    const stageW = stage.clientWidth;
-    const stageH = stage.clientHeight;
-    const boxW = (frame.width / 100) * stageW;
-    const boxH = (frame.height / 100) * stageH;
-    const naturalW = img.naturalWidth;
-    const naturalH = img.naturalHeight;
-    if (!(naturalW > 0 && naturalH > 0 && boxW > 0 && boxH > 0)) {
-      return;
+  /**
+   * 換上的圖等比塞進原圖層的框並置中（與產出時的處理相同），全部用畫布百分比計算：
+   *   框寬高(px) = 框% × 原稿畫布寬高
+   *   縮放 = min(框寬 ÷ 圖寬, 框高 ÷ 圖高)
+   * 讀不到圖的寬高時，直接用框的位置與寬度。
+   */
+  function containedRect(frame, info) {
+    const canvasW = state.frames.width;
+    const canvasH = state.frames.height;
+    const boxW = (frame.width / 100) * canvasW;
+    const boxH = (frame.height / 100) * canvasH;
+    if (!(info.width > 0 && info.height > 0 && boxW > 0 && boxH > 0)) {
+      return { left: frame.left, top: frame.top, width: frame.width };
     }
-    const scale = Math.min(boxW / naturalW, boxH / naturalH);
-    const w = naturalW * scale;
-    const h = naturalH * scale;
-    img.style.left = `${(frame.left / 100) * stageW + (boxW - w) / 2}px`;
-    img.style.top = `${(frame.top / 100) * stageH + (boxH - h) / 2}px`;
-    img.style.width = `${w}px`;
+    const scale = Math.min(boxW / info.width, boxH / info.height);
+    const w = info.width * scale;
+    const h = info.height * scale;
+    return {
+      left: frame.left + (((boxW - w) / 2) / canvasW) * 100,
+      top: frame.top + (((boxH - h) / 2) / canvasH) * 100,
+      width: (w / canvasW) * 100,
+    };
   }
 
   function imageKey(file) {
@@ -4134,7 +4214,7 @@ function createApplyWorkspace(root) {
         continue;
       }
       try {
-        state.imageUrls[key] = await readImageDataUrl(file);
+        state.imageUrls[key] = await readImageInfo(file);
       } catch (error) {
         setStatus(`無法讀取 ${file.name}：${error.message || error}`);
       }
@@ -4184,16 +4264,15 @@ function createApplyWorkspace(root) {
       img.style.top = `${frame.top}%`;
       img.style.width = `${frame.width}%`;
       const replacement = set && set.files[name];
-      const url = replacement && state.imageUrls[imageKey(replacement)];
-      if (url) {
-        // 圖已預先載入：定位完成才顯示，不會先跳一下
+      const info = replacement && state.imageUrls[imageKey(replacement)];
+      if (info) {
+        // 圖已預先讀好，寬高也已知：直接定位顯示
+        const rect = containedRect(frame, info);
         img.classList.add("is-replaced");
-        img.style.visibility = "hidden";
-        img.addEventListener("load", () => {
-          placeContained(img, frame);
-          img.style.visibility = "visible";
-        });
-        img.src = url;
+        img.style.left = `${rect.left}%`;
+        img.style.top = `${rect.top}%`;
+        img.style.width = `${rect.width}%`;
+        img.src = info.url;
       } else {
         img.src = cache.images[name].dataUrl;
       }
