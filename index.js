@@ -1130,8 +1130,6 @@ const SPEC_KEYS = ["leftPercent", "topPercent", "widthPercent"];
 const FIELD_KEYS = [...SPEC_KEYS, "heightPercent"];
 const ALIGN_X = { left: 0, center: 0.5, right: 1 };
 const ALIGN_Y = { top: 0, middle: 0.5, bottom: 1 };
-const ALIGN_X_KEYS = Object.keys(ALIGN_X);
-const ALIGN_Y_KEYS = Object.keys(ALIGN_Y);
 
 // 內建樣板：module.json 第一次建立時會以此當第 0 筆模組（builtin: true）。
 const BUILTIN_RESIZE_VALUES = {
@@ -1295,12 +1293,6 @@ function normalizeFrameOptions(src, out) {
   if (src.heightPercent != null && Number.isFinite(h) && h > 0) {
     out.heightPercent = h;
   }
-  if (src.alignX in ALIGN_X) {
-    out.alignX = src.alignX;
-  }
-  if (src.alignY in ALIGN_Y) {
-    out.alignY = src.alignY;
-  }
   return out;
 }
 
@@ -1338,14 +1330,13 @@ function hasFrameHeight(spec) {
   return Number.isFinite(spec.heightPercent) && spec.heightPercent > 0;
 }
 
-// 未指定對齊時依框的位置推算：框中心偏左靠左、偏右靠右；產品與背景垂直置中
+// 圖層在框內的位置自動決定（只有設定了高度% 且圖層被縮小時才看得出來）：
+// 框中心偏左靠左、偏右靠右、其餘置中；產品與背景垂直置中，其他靠上
 function resolveAlign(name, spec) {
   const center = spec.leftPercent + spec.widthPercent / 2;
-  const autoX = center < 40 ? "left" : center > 60 ? "right" : "center";
-  const autoY = name === "$PROD" || name === "$BG" ? "middle" : "top";
   return {
-    alignX: spec.alignX in ALIGN_X ? spec.alignX : autoX,
-    alignY: spec.alignY in ALIGN_Y ? spec.alignY : autoY,
+    alignX: center < 40 ? "left" : center > 60 ? "right" : "center",
+    alignY: name === "$PROD" || name === "$BG" ? "middle" : "top",
   };
 }
 
@@ -1409,11 +1400,6 @@ function normalizeTemplate(raw) {
       }),
     },
   };
-}
-
-function builtinTemplateValues() {
-  const builtin = moduleStore.templates.find((template) => template.builtin);
-  return builtin ? builtin.values : BUILTIN_RESIZE_VALUES;
 }
 
 function newDraftVariant() {
@@ -2233,8 +2219,6 @@ function createResizeWorkspace(root) {
     widthPercent: el("field-widthPercent"),
     heightPercent: el("field-heightPercent"),
   };
-  const alignXPicker = el("align-x");
-  const alignYPicker = el("align-y");
   const stage = el("preview-stage");
   const templatePicker = el("template-picker");
   const variantPicker = el("variant-picker");
@@ -2342,12 +2326,6 @@ function createResizeWorkspace(root) {
     if (Number.isFinite(h) && h > 0) {
       out.heightPercent = h;
     }
-    if (alignXPicker.selectedIndex >= 0) {
-      out.alignX = ALIGN_X_KEYS[alignXPicker.selectedIndex];
-    }
-    if (alignYPicker.selectedIndex >= 0) {
-      out.alignY = ALIGN_Y_KEYS[alignYPicker.selectedIndex];
-    }
     return out;
   }
 
@@ -2369,9 +2347,6 @@ function createResizeWorkspace(root) {
       return;
     }
     writeFields(spec);
-    const align = resolveAlign(state.elementName, spec);
-    setPickerIndex(alignXPicker, ALIGN_X_KEYS.indexOf(align.alignX));
-    setPickerIndex(alignYPicker, ALIGN_Y_KEYS.indexOf(align.alignY));
   }
 
   function commitFields() {
@@ -2393,6 +2368,8 @@ function createResizeWorkspace(root) {
     }
     const target = variant.elements[state.elementName];
     delete target.heightPercent;
+    delete target.alignX;
+    delete target.alignY;
     Object.assign(target, next);
   }
 
@@ -2436,8 +2413,6 @@ function createResizeWorkspace(root) {
 
   function renderElementPicker() {
     fillPicker(elementPicker, EDITABLE_ELEMENT_NAMES);
-    fillPicker(alignXPicker, ["靠左", "置中", "靠右"]);
-    fillPicker(alignYPicker, ["靠上", "置中", "靠下"]);
     setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(state.elementName));
   }
 
@@ -2854,6 +2829,19 @@ function createResizeWorkspace(root) {
     commitFields();
   }
 
+  // 預覽區不吃滑鼠滾輪：避免誤滑讓圖片左右位移，滾輪改為捲動整個面板
+  stage.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const scroller = document.scrollingElement || document.body;
+    scroller.scrollTop += event.deltaY;
+  });
+  stage.addEventListener("scroll", () => {
+    if (stage.scrollLeft || stage.scrollTop) {
+      stage.scrollLeft = 0;
+      stage.scrollTop = 0;
+    }
+  });
+
   document.addEventListener("mousemove", onMouseMove);
   document.addEventListener("mouseup", onMouseUp);
 
@@ -2977,8 +2965,8 @@ function createResizeWorkspace(root) {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
       },
-      // 新模組複製「預設」模組目前的樣板（含鎖定的框高與對齊），沒有才用內建值
-      values: deepClone(builtinTemplateValues()),
+      // 新模組一律從程式內建的原始預設值開始，不受其他模組（包含「預設」）改動影響
+      values: deepClone(BUILTIN_RESIZE_VALUES),
     });
     state.templateIndex = moduleStore.templates.length - 1;
     state.variantIndex = 0;
@@ -3032,11 +3020,8 @@ function createResizeWorkspace(root) {
   }
 
   function defaultElementsFor(template, variant) {
-    // 其他模組以「預設」模組的同名樣板為準；「預設」模組本身還原成程式內建值；都沒有就用置中預設值
-    const sources = template.builtin
-      ? [BUILTIN_RESIZE_VALUES]
-      : [builtinTemplateValues(), BUILTIN_RESIZE_VALUES];
-    for (const values of sources) {
+    // 與內建樣板同名就還原成程式內建的原始數值，其餘還原成置中預設值
+    for (const values of [BUILTIN_RESIZE_VALUES]) {
       const match = values.variants.find((item) =>
         isSameVariantName(item.outputDocument, variant.outputDocument || ""),
       );
@@ -3345,9 +3330,6 @@ function createResizeWorkspace(root) {
   });
   root.querySelectorAll("[data-layer-move]").forEach((button) => {
     button.addEventListener("click", () => moveLayer(button.getAttribute("data-layer-move")));
-  });
-  [alignXPicker, alignYPicker].forEach((picker) => {
-    picker.addEventListener("change", updatePreviewFromFields);
   });
 
   el("btn-manage-variants").addEventListener("click", () => {

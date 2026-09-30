@@ -195,10 +195,6 @@
         flex: 1 1 0;
       }
 
-      .align-picker {
-        flex: 1 1 0;
-        min-width: 0;
-      }
 
       .preview-handle.is-ne,
       .preview-handle.is-sw {
@@ -357,6 +353,16 @@
         white-space: pre-wrap;
       }
 
+      /* 窄面板時路徑換到按鈕上方，不會壓到按鈕 */
+      .module-folder-bar {
+        flex-wrap: wrap;
+      }
+
+      .module-folder-bar .hint {
+        flex: 1 1 100%;
+        word-break: break-all;
+      }
+
       .text-input.is-suggested {
         border-color: #0d66d0;
       }
@@ -448,7 +454,7 @@
       <sp-button id="btn-resize-1200x629" variant="cta">開始執行</sp-button>
 
       <div id="resize-settings-panel" style="display: none; width: 100%">
-        <div class="preview-bar" style="margin: 0 0 6px">
+        <div class="preview-bar module-folder-bar" style="margin: 0 0 6px">
           <span id="module-folder-label" class="hint"></span>
           <button type="button" id="btn-edit-module-json">編輯</button>
           <button type="button" id="btn-change-module-folder">變更資料夾</button>
@@ -662,15 +668,6 @@
                 <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
                 <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
               </div>
-            </div>
-            <div class="settings-field-row">
-              <label>對齊</label>
-              <sp-picker data-role="align-x" size="s" class="align-picker">
-                <sp-menu slot="options"></sp-menu>
-              </sp-picker>
-              <sp-picker data-role="align-y" size="s" class="align-picker">
-                <sp-menu slot="options"></sp-menu>
-              </sp-picker>
             </div>
             <div class="settings-field-row">
               <label>層級</label>
@@ -901,15 +898,6 @@
                 <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
                 <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
               </div>
-            </div>
-            <div class="settings-field-row">
-              <label>對齊</label>
-              <sp-picker data-role="align-x" size="s" class="align-picker">
-                <sp-menu slot="options"></sp-menu>
-              </sp-picker>
-              <sp-picker data-role="align-y" size="s" class="align-picker">
-                <sp-menu slot="options"></sp-menu>
-              </sp-picker>
             </div>
             <div class="settings-field-row">
               <label>層級</label>
