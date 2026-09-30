@@ -2482,6 +2482,7 @@ function createResizeWorkspace(root) {
     }
     // 新增模組的範本：第 0 項是程式內建的原始數值，其後是各模組；預設跟著目前選的模組
     fillPicker(basePicker, ["內建預設（原始數值）", ...names]);
+    updateTemplateHint();
     setPickerIndex(basePicker, moduleStore.templates.length ? state.templateIndex + 1 : 0);
   }
 
@@ -3009,6 +3010,10 @@ function createResizeWorkspace(root) {
   }
 
   async function uploadPsd() {
+    if (masterNeedsTemplate()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
     let file;
     try {
       file = await localFileSystem.getFileForOpening({ types: ["psd", "psb"] });
@@ -3516,6 +3521,20 @@ function createResizeWorkspace(root) {
     templateNameInput.value = suggestTemplateName(doc);
     templateNameInput.classList.add("is-suggested");
     setStatus(`${doc.name} 尚未建立模組，確認名稱後按「新增」。`);
+    updateTemplateHint();
+  }
+
+  // 目前母版還沒建立模組（還沒按「新增」）
+  function masterNeedsTemplate() {
+    return (
+      isDocumentOpen(state.master) &&
+      Boolean(validMasterOrNull(state.master)) &&
+      findTemplateIndexForDocument(state.master) < 0
+    );
+  }
+
+  function updateTemplateHint() {
+    el("template-hint").style.display = masterNeedsTemplate() ? "block" : "none";
   }
 
   function open(master, note) {
