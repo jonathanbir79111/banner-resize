@@ -387,16 +387,23 @@
         cursor: pointer;
       }
 
+      /* 位置由程式依「圖層」按鈕計算；放在分頁最後才能蓋在其他元素上面 */
       .layer-panel {
         position: absolute;
-        top: 100%;
-        left: 0;
-        right: 0;
+        box-sizing: border-box;
         z-index: 20;
         padding: 6px 10px;
         background: #2e2e2e;
         border: 1px solid #0d66d0;
         border-radius: 4px;
+      }
+
+      [data-workspace] {
+        position: relative;
+      }
+
+      .layer-check.is-missing {
+        opacity: 0.4;
       }
 
       .layer-check {
@@ -810,6 +817,44 @@
             </div>
           </dialog>
 
+          <dialog data-role="required-dialog">
+            <div class="dialog-body manager-body">
+              <p class="dialog-text">勾選 PSD 必須有的圖層（沒勾的可以不存在）</p>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$LOGO" />
+                $LOGO
+              </label>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$PROD" />
+                $PROD
+              </label>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$HEAD" />
+                $HEAD
+              </label>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$CTA" />
+                $CTA
+              </label>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$SM" />
+                $SM
+              </label>
+              <label class="layer-check">
+                <input type="checkbox" data-required-name="$BG" />
+                $BG
+              </label>
+              <div class="manager-actions">
+                <sp-button data-role="btn-required-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-required-save" variant="cta"
+                  >儲存</sp-button
+                >
+              </div>
+            </div>
+          </dialog>
+
           <div class="settings-row">
             <div class="picker-col">
               <div class="picker-title-row">
@@ -822,6 +867,7 @@
             <div class="picker-col layer-dropdown">
               <div class="picker-title-row">
                 <span class="picker-title">圖層（勾選要套圖的圖層）</span>
+                <button type="button" class="small-btn" data-role="btn-required">必選</button>
               </div>
               <button type="button" class="layer-toggle" data-role="layer-toggle">
                 （尚未勾選圖層）
