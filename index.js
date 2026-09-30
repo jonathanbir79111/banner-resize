@@ -2200,6 +2200,15 @@ async function exportLayerPreviewPng(master, layer, file, name) {
 
 const PREVIEW_TEMP_NAME = "preview-temp";
 
+// UXP 的 closeWithoutSaving() 不一定回傳 Promise，不能直接接 .catch()
+async function closeDocumentQuietly(doc) {
+  try {
+    await doc.closeWithoutSaving();
+  } catch (_error) {
+    // 已關閉
+  }
+}
+
 // 之前被中斷而殘留的暫存文件一併關掉
 function closeLeftoverPreviewDocuments() {
   const leftovers = [];
@@ -2209,7 +2218,7 @@ function closeLeftoverPreviewDocuments() {
     }
   }
   return Promise.all(
-    leftovers.map((doc) => doc.closeWithoutSaving().catch(() => {})),
+    leftovers.map((doc) => closeDocumentQuietly(doc)),
   );
 }
 
@@ -3912,7 +3921,7 @@ async function generateApplyDocuments(master, sets) {
           }
           await saveDocumentAsPsd(copy, file);
         } finally {
-          await copy.closeWithoutSaving().catch(() => {});
+          await closeDocumentQuietly(copy);
         }
       }, `產製 ${set.name}`);
       done += 1;
@@ -3955,6 +3964,7 @@ function createApplyWorkspace(root) {
     sets: [],
     outputIndex: 0,
     imageUrls: {},
+    loading: false,
   };
 
   const workspace = { root, open, show, commit: commitSettings };
@@ -4109,21 +4119,59 @@ function createApplyWorkspace(root) {
     img.style.width = `${w}px`;
   }
 
-  async function imageUrlFor(file) {
-    const key = file.nativePath || file.name;
-    if (!state.imageUrls[key]) {
-      state.imageUrls[key] = await readImageDataUrl(file);
+  function imageKey(file) {
+    return file.nativePath || file.name;
+  }
+
+  // 先把這一組要換的圖全部讀好，再一次畫出來（避免逐張閃爍）
+  async function preloadSet(set) {
+    if (!set) {
+      return;
     }
-    return state.imageUrls[key];
+    for (const file of Object.values(set.files)) {
+      const key = imageKey(file);
+      if (state.imageUrls[key]) {
+        continue;
+      }
+      try {
+        state.imageUrls[key] = await readImageDataUrl(file);
+      } catch (error) {
+        setStatus(`無法讀取 ${file.name}：${error.message || error}`);
+      }
+    }
+  }
+
+  async function showOutput(index) {
+    state.outputIndex = index;
+    await preloadSet(currentSet());
+    if (state.outputIndex === index) {
+      renderPreview();
+    }
+  }
+
+  function showStageMessage(text) {
+    const message = document.createElement("div");
+    message.className = "stage-message";
+    message.textContent = text;
+    stage.appendChild(message);
   }
 
   function renderPreview() {
     stage.innerHTML = "";
-    const cache = state.previewCache;
+    // 只用目前母版的擷取結果，避免換 PSD 時閃出上一份的圖
+    const cache =
+      state.previewCache && state.master && state.previewCache.masterId === state.master.id
+        ? state.previewCache
+        : null;
+    if (state.frames) {
+      resizeStage();
+    }
     if (!cache || !state.frames) {
+      if (state.loading) {
+        showStageMessage("預覽擷取中，請稍候…");
+      }
       return;
     }
-    resizeStage();
     const set = currentSet();
     cache.order.forEach((name) => {
       const frame = state.frames.frames[name];
@@ -4136,16 +4184,16 @@ function createApplyWorkspace(root) {
       img.style.top = `${frame.top}%`;
       img.style.width = `${frame.width}%`;
       const replacement = set && set.files[name];
-      if (replacement) {
+      const url = replacement && state.imageUrls[imageKey(replacement)];
+      if (url) {
+        // 圖已預先載入：定位完成才顯示，不會先跳一下
         img.classList.add("is-replaced");
-        imageUrlFor(replacement)
-          .then((url) => {
-            img.addEventListener("load", () => placeContained(img, frame));
-            img.src = url;
-          })
-          .catch((error) => {
-            setStatus(`無法讀取 ${replacement.name}：${error.message || error}`);
-          });
+        img.style.visibility = "hidden";
+        img.addEventListener("load", () => {
+          placeContained(img, frame);
+          img.style.visibility = "visible";
+        });
+        img.src = url;
       } else {
         img.src = cache.images[name].dataUrl;
       }
@@ -4173,16 +4221,22 @@ function createApplyWorkspace(root) {
       return;
     }
     setStatus("擷取圖層中，請稍候…");
+    state.loading = true;
+    renderPreview();
     try {
       const cache = await getPreviewCache(master, force, applyRequiredLayers());
       if (state.master !== master) {
         return;
       }
       state.previewCache = cache;
+      state.loading = false;
       renderPreview();
-      setStatus(`預覽來源：${master.name}`);
+      if (!state.sets.length) {
+        setStatus(`預覽來源：${master.name}`);
+      }
     } catch (error) {
       state.previewCache = null;
+      state.loading = false;
       renderPreview();
       setStatus(`預覽擷取失敗：${describeModalError(error)}`);
     }
@@ -4398,8 +4452,10 @@ function createApplyWorkspace(root) {
     state.sets = result.sets;
     state.outputIndex = 1;
     renderOutputPicker();
-    renderPreview();
-    setStatus(`找到 ${result.sets.length} 組（${result.summary}）`);
+    await showOutput(1);
+    setStatus(
+      `找到 ${result.sets.length} 組（${result.summary}）${state.loading ? "，預覽擷取中…" : ""}`,
+    );
   }
 
   // ----- 必選：PSD 必須有哪些圖層（沒勾的可以不存在）-----
@@ -4437,8 +4493,7 @@ function createApplyWorkspace(root) {
   el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
   el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
   outputPicker.addEventListener("change", (event) => {
-    state.outputIndex = readPickerIndex(event);
-    renderPreview();
+    showOutput(readPickerIndex(event));
   });
   templateNameInput.addEventListener("input", () => {
     templateNameInput.classList.remove("is-invalid", "is-suggested");
@@ -4506,7 +4561,7 @@ function createApplyWorkspace(root) {
       state.sets = result.sets;
       state.outputIndex = 1;
       renderOutputPicker();
-      renderPreview();
+      await showOutput(1);
     }
     if (!(await persist("設定已儲存"))) {
       return;
