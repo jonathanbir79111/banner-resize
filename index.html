@@ -209,9 +209,12 @@
         border-bottom: 1px solid #0d66d0;
       }
 
+      /* 用 div 而非 button：UXP 的 button 會套原生樣式，背景色改不動 */
       .tab-btn {
         flex: 1;
-        padding: 6px 0;
+        padding: 8px 0;
+        text-align: center;
+        border-radius: 6px 6px 0 0;
         font-size: 13px;
         color: #aaa;
         background: transparent;
@@ -220,9 +223,12 @@
         cursor: pointer;
       }
 
+      /* 選中的分頁：白底灰字 */
       .tab-btn.is-active {
-        color: white;
+        color: #505050;
+        background: white;
         border-bottom-color: #0d66d0;
+        font-weight: bold;
       }
 
       .module-row {
@@ -404,9 +410,9 @@
 
       .stage-message {
         position: absolute;
-        left: 0;
-        right: 0;
-        top: 45%;
+        left: 5%;
+        width: 90%;
+        top: 40%;
         text-align: center;
         font-size: 13px;
         color: #666;
@@ -528,10 +534,8 @@
         </div>
 
         <div class="tab-bar">
-          <button type="button" class="tab-btn is-active" data-tab="resize">
-            Resize
-          </button>
-          <button type="button" class="tab-btn" data-tab="apply">套圖</button>
+          <div class="tab-btn is-active" data-tab="resize">Resize</div>
+          <div class="tab-btn" data-tab="apply">套圖</div>
         </div>
 
         <!-- ===== Resize 分頁 ===== -->
@@ -911,11 +915,12 @@
             </div>
           </div>
 
-          <div class="preview-stage" data-role="preview-stage"></div>
-          <div class="preview-bar">
+          <!-- 狀態列放在預覽上方，錯誤訊息不必捲動就看得到 -->
+          <div class="preview-bar" style="margin: 8px 0 4px">
             <span data-role="preview-status" class="hint"></span>
             <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
           </div>
+          <div class="preview-stage" data-role="preview-stage"></div>
 
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">

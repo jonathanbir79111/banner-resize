@@ -2232,34 +2232,45 @@ async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES) {
 
   const tempFolder = await localFileSystem.getTemporaryFolder();
   const images = {};
+  // 單一圖層匯出失敗只略過那一層，其他圖層照常預覽
+  const failed = [];
+  let firstError = null;
 
   await runModal(
     async () => {
       await closeLeftoverPreviewDocuments();
       for (const name of presentNames) {
-        // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
-        const file = await tempFolder.createFile(
-          `preview-${master.id}-${name.replace("$", "")}.png`,
-          { overwrite: true },
-        );
-        const size = await exportLayerPreviewPng(
-          master,
-          sourceLayers[name],
-          file,
-          name,
-        );
-        const buffer = await file.read({ format: formats.binary });
-        images[name] = {
-          ...size,
-          dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
-        };
+        try {
+          // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
+          const file = await tempFolder.createFile(
+            `preview-${master.id}-${name.replace("$", "")}.png`,
+            { overwrite: true },
+          );
+          const size = await exportLayerPreviewPng(master, sourceLayers[name], file, name);
+          const buffer = await file.read({ format: formats.binary });
+          images[name] = {
+            ...size,
+            dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
+          };
+        } catch (error) {
+          firstError = firstError || error;
+          failed.push(`${name}：${error.message || error}`);
+        }
       }
       app.activeDocument = master;
     },
     "擷取預覽圖層",
   );
 
-  return { masterId: master.id, order, images };
+  if (!Object.keys(images).length) {
+    throw firstError || new Error("沒有可預覽的圖層");
+  }
+  return {
+    masterId: master.id,
+    order: order.filter((name) => images[name]),
+    images,
+    failed,
+  };
 }
 
 // 外掛自己建立暫存文件、切換文件時（擷取預覽、產圖）不跟隨作用中文件
@@ -4040,6 +4051,7 @@ function createApplyWorkspace(root) {
     outputIndex: 0,
     imageUrls: {},
     loading: false,
+    previewError: "",
   };
 
   const workspace = { root, open, show, commit: commitSettings };
@@ -4249,6 +4261,8 @@ function createApplyWorkspace(root) {
     if (!cache || !state.frames) {
       if (state.loading) {
         showStageMessage("預覽擷取中，請稍候…");
+      } else if (state.previewError) {
+        showStageMessage(state.previewError);
       }
       return;
     }
@@ -4291,7 +4305,10 @@ function createApplyWorkspace(root) {
     try {
       state.frames = measureLayerFrames(master, applyRequiredLayers());
     } catch (error) {
-      setStatus(`${error.message || error}（可按「必選」調整必須有的圖層）`);
+      state.frames = null;
+      state.previewError = `${error.message || error}（可按「必選」調整必須有的圖層）`;
+      renderPreview();
+      setStatus(state.previewError);
       return;
     }
     loadSettings();
@@ -4309,15 +4326,19 @@ function createApplyWorkspace(root) {
       }
       state.previewCache = cache;
       state.loading = false;
+      state.previewError = "";
       renderPreview();
-      if (!state.sets.length) {
+      if (cache.failed && cache.failed.length) {
+        setStatus(`部分圖層無法預覽（${cache.failed.join("；")}）`);
+      } else if (!state.sets.length) {
         setStatus(`預覽來源：${master.name}`);
       }
     } catch (error) {
       state.previewCache = null;
       state.loading = false;
+      state.previewError = `預覽擷取失敗：${describeModalError(error)}`;
       renderPreview();
-      setStatus(`預覽擷取失敗：${describeModalError(error)}`);
+      setStatus(state.previewError);
     }
   }
 
