@@ -1348,16 +1348,41 @@ function resolveAlign(name, spec) {
  *   位置     = 框起點 + (框尺寸 − 圖層尺寸) × 對齊比例（0 / 0.5 / 1）
  */
 function fitInFrame(name, spec, aspectPercent) {
+  const isBackground = name === "$BG";
+  const framed = !isBackground && hasFrameHeight(spec);
   const naturalHeight = spec.widthPercent * aspectPercent;
-  const limited = hasFrameHeight(spec) && naturalHeight > spec.heightPercent;
+  const limited = framed && naturalHeight > spec.heightPercent;
   const scale = limited ? spec.heightPercent / naturalHeight : 1;
   const width = spec.widthPercent * scale;
   const height = naturalHeight * scale;
-  const frameHeight = hasFrameHeight(spec) ? spec.heightPercent : height;
+  const frameHeight = framed ? spec.heightPercent : height;
   const { alignX, alignY } = resolveAlign(name, spec);
-  return {
+  const rect = {
     left: spec.leftPercent + (spec.widthPercent - width) * ALIGN_X[alignX],
     top: spec.topPercent + (frameHeight - height) * ALIGN_Y[alignY],
+    width,
+    height,
+  };
+  return isBackground ? coverBackgroundRect(rect) : rect;
+}
+
+/**
+ * $BG 永遠滿版，不露出白邊：
+ *   1. 太小就以中心等比放大到蓋滿畫布：倍率 = max(1, 100 ÷ 寬%, 100 ÷ 高%)
+ *   2. 位置夾在 [100 − 寬%, 0]、[100 − 高%, 0] 之間
+ */
+function coverBackgroundRect(rect) {
+  if (!(rect.width > 0 && rect.height > 0)) {
+    return rect;
+  }
+  const factor = Math.max(1, 100 / rect.width, 100 / rect.height);
+  const width = rect.width * factor;
+  const height = rect.height * factor;
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  return {
+    left: clampNumber(centerX - width / 2, 100 - width, 0),
+    top: clampNumber(centerY - height / 2, 100 - height, 0),
     width,
     height,
   };
@@ -2365,7 +2390,7 @@ function createResizeWorkspace(root) {
       out[key] = Number.isFinite(n) ? n : spec[key];
     }
     const h = parseFloat(fields.heightPercent.value);
-    if (Number.isFinite(h) && h > 0) {
+    if (state.elementName !== "$BG" && Number.isFinite(h) && h > 0) {
       out.heightPercent = h;
     }
     return out;
@@ -2380,8 +2405,24 @@ function createResizeWorkspace(root) {
       : "";
   }
 
+  // $BG 欄位顯示實際滿版後的位置與大小（舊資料若會露白邊，存檔時一併修正）
+  function coveredBackgroundSpec(spec) {
+    const ratio = heightRatio("$BG");
+    if (!ratio) {
+      return { leftPercent: spec.leftPercent, topPercent: spec.topPercent, widthPercent: spec.widthPercent };
+    }
+    const rect = fitInFrame("$BG", spec, ratio);
+    return {
+      leftPercent: roundTo(rect.left, 2),
+      topPercent: roundTo(rect.top, 2),
+      widthPercent: roundTo(rect.width, 2),
+    };
+  }
+
   function loadFields() {
-    const spec = currentSpec();
+    const rawSpec = currentSpec();
+    const spec =
+      rawSpec && state.elementName === "$BG" ? coveredBackgroundSpec(rawSpec) : rawSpec;
     if (!spec) {
       for (const key of FIELD_KEYS) {
         fields[key].value = "";
@@ -2859,7 +2900,18 @@ function createResizeWorkspace(root) {
     const dxPercent = ((event.clientX - drag.startX) / drag.stageW) * 100;
     const dyPercent = ((event.clientY - drag.startY) / drag.stageH) * 100;
 
-    if (drag.mode === "move") {
+    if (state.elementName === "$BG") {
+      // 背景拖拉／縮放時即時夾在滿版範圍內（可為負值，但不會露出白邊）
+      const next =
+        drag.mode === "move"
+          ? {
+              ...drag.start,
+              leftPercent: drag.start.leftPercent + dxPercent,
+              topPercent: drag.start.topPercent + dyPercent,
+            }
+          : resizeSpecFromDrag(drag, dxPercent, dyPercent);
+      writeFields(coveredBackgroundSpec(next));
+    } else if (drag.mode === "move") {
       fields.leftPercent.value = roundPercent(drag.start.leftPercent + dxPercent);
       fields.topPercent.value = roundPercent(drag.start.topPercent + dyPercent);
     } else {
