@@ -363,6 +363,19 @@
         word-break: break-all;
       }
 
+      .base-row .picker-title {
+        flex: 0 0 auto;
+      }
+
+      .check-label {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: #ddd;
+      }
+
       .text-input.is-suggested {
         border-color: #0d66d0;
       }
@@ -491,6 +504,16 @@
             <button type="button" class="small-btn" data-role="btn-add-template">
               新增
             </button>
+          </div>
+          <div class="module-row base-row">
+            <span class="picker-title">範本</span>
+            <sp-picker data-role="base-template-picker" size="m">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+            <label class="check-label">
+              <input type="checkbox" data-role="size-from-psd" checked />
+              寬高依 PSD 原稿比例
+            </label>
           </div>
 
           <div class="module-row">
@@ -721,6 +744,16 @@
             <button type="button" class="small-btn" data-role="btn-add-template">
               新增
             </button>
+          </div>
+          <div class="module-row base-row">
+            <span class="picker-title">範本</span>
+            <sp-picker data-role="base-template-picker" size="m">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
+            <label class="check-label">
+              <input type="checkbox" data-role="size-from-psd" checked />
+              寬高依 PSD 原稿比例
+            </label>
           </div>
 
           <div class="module-row">

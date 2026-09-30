@@ -1804,6 +1804,46 @@ function suggestTemplateName(doc) {
   return `${stripExtension(doc.name)}-${formatTimestamp()}`;
 }
 
+/**
+ * 依母版原稿換算各圖層在輸出畫布上的寬度%：
+ * 整張原稿等比放進輸出畫布（contain），所有圖層用同一個倍率，
+ *   倍率     s = min(輸出寬 ÷ 原稿寬, 輸出高 ÷ 原稿高)
+ *   寬度%    = 圖層寬 × s ÷ 輸出寬 × 100
+ * 圖層之間的大小比例和原稿一致；原稿以含齊圖層的工作區域（或整份文件）為準。
+ */
+function measurePsdWidthPercents(master, outputWidth, outputHeight) {
+  const container = getMcdSourceContainer(master);
+  const layers = requireMcdSmartLayers(container);
+  const frame =
+    container === master
+      ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+      : readLayerBounds(container);
+  const frameW = Math.max(frame.right - frame.left, 1);
+  const frameH = Math.max(frame.bottom - frame.top, 1);
+  const scale = Math.min(outputWidth / frameW, outputHeight / frameH);
+
+  const out = {};
+  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    const b = readLayerBounds(layers[name]);
+    const width = Math.max(b.right - b.left, 1);
+    out[name] = roundTo(((width * scale) / outputWidth) * 100, 2);
+  }
+  return out;
+}
+
+// 範本的位置（靠左%、靠上%）與層級保留；寬度改成 PSD 原稿比例，高度不限，$BG 回到自動鋪滿
+function applyPsdWidths(values, widths) {
+  for (const variant of values.variants) {
+    for (const name of MCD_POSITION_ELEMENT_NAMES) {
+      const spec = variant.elements[name];
+      spec.widthPercent = widths[name];
+      delete spec.heightPercent;
+    }
+    delete variant.elements.$BG;
+  }
+  return values;
+}
+
 function validMasterOrNull(doc) {
   if (!doc) {
     return null;
@@ -2224,6 +2264,8 @@ function createResizeWorkspace(root) {
   const variantPicker = el("variant-picker");
   const elementPicker = el("element-picker");
   const templateNameInput = el("template-name");
+  const basePicker = el("base-template-picker");
+  const sizeFromPsdCheckbox = el("size-from-psd");
   const variantNameInput = el("variant-name");
 
   const state = {
@@ -2392,13 +2434,19 @@ function createResizeWorkspace(root) {
   // ----- 下拉選單 -----
 
   function renderTemplatePicker() {
-    fillPicker(
-      templatePicker,
-      moduleStore.templates.map((template) => template.name || "（未命名模組）"),
-    );
+    const names = moduleStore.templates.map((template) => template.name || "（未命名模組）");
+    fillPicker(templatePicker, names);
     if (moduleStore.templates.length) {
       setPickerIndex(templatePicker, state.templateIndex);
     }
+    // 新增模組的範本：第 0 項是程式內建的原始數值，其後是各模組；預設跟著目前選的模組
+    fillPicker(basePicker, ["內建預設（原始數值）", ...names]);
+    setPickerIndex(basePicker, moduleStore.templates.length ? state.templateIndex + 1 : 0);
+  }
+
+  function selectedBaseTemplate() {
+    const index = basePicker.selectedIndex;
+    return index > 0 ? moduleStore.templates[index - 1] || null : null;
   }
 
   function renderVariantPicker() {
@@ -2891,6 +2939,7 @@ function createResizeWorkspace(root) {
   function selectTemplate(index) {
     commitFields();
     state.templateIndex = index;
+    setPickerIndex(basePicker, index + 1);
     state.variantIndex = 0;
     clampSelection();
 
@@ -2959,22 +3008,37 @@ function createResizeWorkspace(root) {
     }
 
     commitFields();
+    // 以選定的範本（某個模組，或程式內建原始值）為基礎；勾選時寬度改依 PSD 原稿比例
+    const base = selectedBaseTemplate();
+    const values = deepClone(base ? base.values : BUILTIN_RESIZE_VALUES);
+    const sizeFromPsd = sizeFromPsdCheckbox.checked;
+    if (sizeFromPsd) {
+      try {
+        applyPsdWidths(values, measurePsdWidthPercents(state.master, values.width, values.height));
+      } catch (error) {
+        await app.showAlert(`無法讀取 PSD 圖層大小：${error.message || error}`);
+        return;
+      }
+    }
     moduleStore.templates.push({
       name,
       source: {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
       },
-      // 新模組一律從程式內建的原始預設值開始，不受其他模組（包含「預設」）改動影響
-      values: deepClone(BUILTIN_RESIZE_VALUES),
+      values,
     });
+    const baseLabel = base ? base.name : "內建預設";
     state.templateIndex = moduleStore.templates.length - 1;
     state.variantIndex = 0;
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
 
     renderAll();
-    await persist(`已新增模組「${name}」`, "成功新增模組");
+    await persist(
+      `已新增模組「${name}」（範本：${baseLabel}${sizeFromPsd ? "，寬度依 PSD 原稿比例" : ""}）`,
+      "成功新增模組",
+    );
   }
 
   // ----- 版型（variant / outputDocument）-----
