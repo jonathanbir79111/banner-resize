@@ -2820,9 +2820,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function renderVariantPicker() {
     const template = currentTemplate();
     const variants = template ? template.values.variants : [];
-    const labels = variants.map(variantLabel);
+    // 套圖：預設 + 各組（每組有自己的版面，存在同名的 variant）
+    const labels = isApply
+      ? [variantLabel(variants[0]), ...state.sets.map((set) => set.name)]
+      : variants.map(variantLabel);
     if (isApply) {
-      labels.push(...state.sets.map((set) => set.name));
+      el("btn-sync-sizes").style.display = state.sets.length ? "" : "none";
     }
     fillPicker(variantPicker, labels);
     if (labels.length) {
@@ -3042,6 +3045,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!template || !source) {
       return;
     }
+    if (isApply) {
+      await syncApplyLayers(template, source);
+      return;
+    }
     if (!(await showDialog(el("sync-dialog"), "同步圖層大小"))) {
       return;
     }
@@ -3064,6 +3071,37 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     await persist(
       `已將「${variantLabel(source)}」的圖層大小同步到其他樣板`,
       "已同步圖層大小",
+    );
+  }
+
+  /**
+   * 套圖的同步圖層：目前這組的各圖層大小與位置（含 $BG），
+   * 套到預設與其他所有套圖。
+   */
+  async function syncApplyLayers(template, source) {
+    if (!(await showDialog(el("sync-dialog"), "同步圖層"))) {
+      return;
+    }
+    commitFields();
+    for (const set of state.sets) {
+      applyExtras.variantForSet(set);
+    }
+    for (const variant of template.values.variants) {
+      if (variant === source) {
+        continue;
+      }
+      for (const name of MCD_POSITION_ELEMENT_NAMES) {
+        variant.elements[name] = deepClone(source.elements[name]);
+      }
+      if (source.elements.$BG) {
+        variant.elements.$BG = deepClone(source.elements.$BG);
+      } else {
+        delete variant.elements.$BG;
+      }
+    }
+    await persist(
+      `已將「${variantLabel(source)}」的圖層大小與位置同步到全部套圖`,
+      "已同步圖層",
     );
   }
 
@@ -3597,8 +3635,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   variantPicker.addEventListener("change", async (event) => {
     commitFields();
     if (isApply) {
-      // 套圖只有一個版面（預設）；其餘選項是各組換圖，共用同一個版面
-      state.variantIndex = 0;
+      // 第 0 項是預設版面，其餘是各組換圖（各自的版面）
       await applyExtras.showOutput(readPickerIndex(event));
       loadFields();
       return;
@@ -3848,6 +3885,23 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     function resetOutputs() {
       state.sets = [];
       state.outputIndex = 0;
+      state.variantIndex = 0;
+    }
+
+    // 每組套圖有自己的版面（同名 variant）；第一次選到時從預設複製一份
+    function variantForSet(set) {
+      const template = currentTemplate();
+      if (!template) {
+        return null;
+      }
+      const variants = template.values.variants;
+      let variant = variants.find((item) => item.outputDocument === set.name);
+      if (!variant) {
+        variant = deepClone(variants[0]);
+        variant.outputDocument = set.name;
+        variants.push(variant);
+      }
+      return variant;
     }
 
     function currentSet() {
@@ -3875,7 +3929,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         const key = imageKey(file);
         if (!state.imageInfos[key]) {
           try {
-            state.imageInfos[key] = await readImageInfo(file);
+            state.imageInfos[key] = await readTrimmedImageInfo(file, state.master);
           } catch (error) {
             setStatus(`無法讀取 ${file.name}：${error.message || error}`);
           }
@@ -3885,7 +3939,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     async function showOutput(index) {
       state.outputIndex = index;
-      await preloadSet(currentSet());
+      const set = currentSet();
+      const variant = set ? variantForSet(set) : null;
+      const variants = currentTemplate() ? currentTemplate().values.variants : [];
+      state.variantIndex = variant ? variants.indexOf(variant) : 0;
+      await preloadSet(set);
       if (state.outputIndex === index) {
         renderPreview();
       }
@@ -3926,7 +3984,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return;
       }
       state.sets = result.sets;
-      state.variantIndex = 0;
       await showOutput(1);
       renderVariantPicker();
       loadFields();
@@ -3948,7 +4005,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
       try {
         const done = await whilePhotoshopBusy(() =>
-          generateApplyDocuments(state.master, state.sets, template.values.variants[0]),
+          generateApplyDocuments(state.master, state.sets, (set) => {
+            const variants = template.values.variants;
+            return variants.find((item) => item.outputDocument === set.name) || variants[0];
+          }),
         );
         if (done) {
           setStatus(`已產出 ${done} 個套圖檔案`);
@@ -4044,7 +4104,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
     el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
 
-    return { load, commit, resetOutputs, replacementFor, showOutput, generate };
+    return { load, commit, resetOutputs, replacementFor, showOutput, generate, variantForSet };
   }
 
   if (isApply) {
@@ -4128,7 +4188,7 @@ function normalizeApplyTemplate(raw) {
 
 /**
  * 套圖的預設版面：PSD 原稿各圖層的位置與大小（畫布百分比），畫布＝原稿尺寸。
- * 只有一個版面「預設」，各組換圖都套用它。
+ * 各組換圖第一次選到時從「預設」複製一份自己的版面，可再用「同步圖層」統一。
  */
 function applyInitialValues(doc) {
   const measured = measureLayerFrames(doc, applyRequiredLayers());
@@ -4358,6 +4418,75 @@ async function readImageInfo(file) {
 }
 
 /**
+ * 套圖預覽用的換圖資訊，去掉透明邊。
+ * Photoshop 換圖後量到的圖層範圍不含透明像素，產出時是「看得到的部分」塞進框；
+ * 預覽若用整張檔案（含透明邊）的寬高，圖會顯得比產出小很多。
+ * 有透明圖層的圖檔先在 Photoshop 開啟、裁掉透明邊再匯出預覽；
+ * 不透明（背景圖層）或讀不到時直接讀檔頭寬高。
+ */
+async function readTrimmedImageInfo(imageFile, master) {
+  let trimmed = null;
+  try {
+    const tempFolder = await localFileSystem.getTemporaryFolder();
+    const out = await tempFolder.createFile(`apply-preview-${Date.now()}.png`, { overwrite: true });
+    await whilePhotoshopBusy(() =>
+      runModal(async () => {
+        try {
+          trimmed = await exportTrimmedImagePng(imageFile, out);
+        } finally {
+          if (isDocumentOpen(master)) {
+            app.activeDocument = master;
+          }
+        }
+      }, "擷取套圖預覽"),
+    );
+    if (trimmed) {
+      const buffer = await out.read({ format: formats.binary });
+      return {
+        url: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
+        width: trimmed.width,
+        height: trimmed.height,
+      };
+    }
+  } catch (_error) {
+    // 改讀檔頭
+  }
+  return readImageInfo(imageFile);
+}
+
+// 回傳裁掉透明邊後的寬高；不需要裁（不透明、多圖層）時回傳 null
+async function exportTrimmedImagePng(imageFile, outFile) {
+  const doc = await app.open(imageFile);
+  try {
+    const layers = doc.layers || [];
+    if (layers.length !== 1 || layers[0].isBackgroundLayer) {
+      return null;
+    }
+    const layer = layers[0];
+    const b = readLayerBounds(layer);
+    const width = Math.round(b.right - b.left);
+    const height = Math.round(b.bottom - b.top);
+    const fullWidth = Math.round(unitNumber(doc.width));
+    const fullHeight = Math.round(unitNumber(doc.height));
+    if (!(width >= 1 && height >= 1) || (width >= fullWidth && height >= fullHeight)) {
+      return null;
+    }
+    await translateLayer(layer, -b.left, -b.top);
+    await doc.resizeCanvas(width, height, constants.AnchorPosition.TOPLEFT);
+    if (width > PREVIEW_MAX_LAYER_WIDTH) {
+      await doc.resizeImage(
+        PREVIEW_MAX_LAYER_WIDTH,
+        Math.max(Math.round((height * PREVIEW_MAX_LAYER_WIDTH) / width), 1),
+      );
+    }
+    await doc.saveAs.png(outFile, { compression: 6 }, true);
+    return { width, height };
+  } finally {
+    await closeDocumentQuietly(doc);
+  }
+}
+
+/**
  * 替換智慧型物件內容，並把新圖等比縮放塞回原本圖層的框內、置中，
  * 所以位置與大小都和原稿一致。
  */
@@ -4384,7 +4513,8 @@ async function replaceLayerImage(layer, imageFile) {
 }
 
 // 每一組：複製原始 PSD → 換圖 → 另存 → 關閉副本（不修改原稿）
-async function generateApplyDocuments(master, sets, variant) {
+// variantFor(set)：這一組要用的版面
+async function generateApplyDocuments(master, sets, variantFor) {
   if (!isDocumentOpen(master)) {
     throw new Error("母版已關閉，請重新開啟或上傳母版。");
   }
@@ -4411,7 +4541,8 @@ async function generateApplyDocuments(master, sets, variant) {
             }
             await replaceLayerImage(layer, set.files[name]);
           }
-          // 再依面板上的版面（靠左／靠上／寬度／高度）擺放每個圖層
+          // 再依面板上這一組的版面（靠左／靠上／寬度／高度）擺放每個圖層
+          const variant = variantFor(set);
           if (variant) {
             const frame =
               container === copy
