@@ -271,6 +271,12 @@
         height: 24px;
       }
 
+      .title-buttons {
+        display: flex;
+        flex-direction: row;
+        gap: 6px;
+      }
+
       .picker-title-row .small-btn {
         height: 22px;
         padding: 0 10px;
@@ -847,9 +853,12 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
-                <button type="button" class="small-btn" data-role="btn-sync-sizes" style="display: none">
-                  同步圖層
-                </button>
+                <div class="title-buttons">
+                  <button type="button" class="small-btn" data-role="btn-sync-sizes" style="display: none">
+                    同步圖層
+                  </button>
+                  <button type="button" class="small-btn" data-role="btn-edit-layers">編輯</button>
+                </div>
               </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
@@ -857,40 +866,33 @@
             </div>
           </div>
 
-          <dialog data-role="required-dialog">
+          <dialog data-role="layer-list-dialog">
             <div class="dialog-body manager-body">
-              <p class="dialog-text">勾選 PSD 必須有的圖層（沒勾的可以不存在）</p>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$LOGO" />
-                $LOGO
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$PROD" />
-                $PROD
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$HEAD" />
-                $HEAD
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$CTA" />
-                $CTA
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$SM" />
-                $SM
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-required-name="$BG" />
-                $BG
-              </label>
-              <div class="manager-actions">
-                <sp-button data-role="btn-required-cancel" variant="secondary"
-                  >取消</sp-button
-                >
-                <sp-button data-role="btn-required-save" variant="cta"
-                  >儲存</sp-button
-                >
+              <div data-role="layer-list-view">
+                <div class="manager-row manager-head">
+                  <span class="manager-name">以下為必選的圖層（勾選＝PSD 必須有）</span>
+                  <button type="button" class="small-btn" data-role="btn-layer-add">新增</button>
+                </div>
+                <div data-role="layer-list"></div>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-layer-list-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-layer-list-save" variant="cta"
+                    >儲存</sp-button
+                  >
+                </div>
+              </div>
+              <div data-role="layer-delete-view" style="display: none">
+                <p class="dialog-text" data-role="layer-delete-text">請問確認刪除這個圖層嗎？</p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-layer-delete-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-layer-delete-confirm" variant="cta"
+                    >確認</sp-button
+                  >
+                </div>
               </div>
             </div>
           </dialog>
@@ -899,37 +901,11 @@
             <div class="picker-col layer-dropdown">
               <div class="picker-title-row">
                 <span class="picker-title">套圖圖層（勾選要換圖的圖層）</span>
-                <button type="button" class="small-btn" data-role="btn-required">必選</button>
               </div>
               <button type="button" class="layer-toggle" data-role="layer-toggle">
                 （尚未勾選圖層）
               </button>
-              <div class="layer-panel" data-role="layer-panel" style="display: none">
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$LOGO" />
-                $LOGO
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$PROD" />
-                $PROD
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$HEAD" />
-                $HEAD
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$CTA" />
-                $CTA
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$SM" />
-                $SM
-              </label>
-              <label class="layer-check">
-                <input type="checkbox" data-layer-name="$BG" />
-                $BG
-              </label>
-              </div>
+              <div class="layer-panel" data-role="layer-panel" style="display: none"></div>
             </div>
           </div>
 

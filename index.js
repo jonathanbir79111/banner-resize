@@ -1321,7 +1321,28 @@ function normalizeElements(raw) {
     }
     normalizeFrameOptions(bg, out.$BG);
   }
+  // 套圖自訂的圖層（圖層「編輯」新增的名稱）
+  for (const name of Object.keys(raw || {})) {
+    const src = raw[name];
+    if (out[name] || name === "$BG" || !src || typeof src !== "object") {
+      continue;
+    }
+    if (SPEC_KEYS.every((key) => Number.isFinite(Number(src[key])))) {
+      out[name] = {};
+      for (const key of SPEC_KEYS) {
+        out[name][key] = Number(src[key]);
+      }
+      normalizeFrameOptions(src, out[name]);
+    }
+  }
   return out;
+}
+
+// 沒有設定值的圖層（例如新增的套圖圖層）用的預設框
+function defaultSpecFor(name) {
+  return deepClone(
+    DEFAULT_VARIANT_ELEMENTS[name] || { leftPercent: 10, topPercent: 10, widthPercent: 30 },
+  );
 }
 
 // ---------- 框 + 等比放入 ----------
@@ -1483,7 +1504,9 @@ const moduleStore = {
   templates: [],
   // 套圖分頁的模組，與 Resize 的 templates 分開
   applyTemplates: [],
-  // 套圖時 PSD 必須有的圖層（「必選」視窗）；未設定時六個都必須
+  // 套圖可用的圖層名稱（圖層「編輯」視窗可新增／改名／刪除）
+  applyLayers: null,
+  // 套圖時 PSD 必須有的圖層（圖層「編輯」視窗勾選）；未設定時六個都必須
   applyRequiredLayers: MCD_SMART_LAYER_NAMES.slice(),
   reference: null,
   listeners: [],
@@ -1552,7 +1575,11 @@ async function readModuleFile(folder) {
   return {
     templates: Array.isArray(data && data.templates) ? data.templates : [],
     applyTemplates: Array.isArray(data && data.applyTemplates) ? data.applyTemplates : [],
-    applyRequiredLayers: normalizeRequiredLayers(data && data.applyRequiredLayers),
+    applyLayers: normalizeApplyLayers(data && data.applyLayers),
+    applyRequiredLayers: normalizeRequiredLayers(
+      data && data.applyRequiredLayers,
+      normalizeApplyLayers(data && data.applyLayers),
+    ),
     reference: normalizeReference(data && data.reference),
   };
 }
@@ -1561,6 +1588,7 @@ function moduleFileContent() {
   const content = {
     templates: moduleStore.templates,
     applyTemplates: moduleStore.applyTemplates,
+    applyLayers: applyLayerNames(),
     applyRequiredLayers: moduleStore.applyRequiredLayers,
   };
   if (moduleStore.reference) {
@@ -1606,6 +1634,7 @@ async function loadModuleStore(folder) {
   moduleStore.applyTemplates = ((raw && raw.applyTemplates) || [])
     .map(normalizeApplyTemplate)
     .filter((template) => template && template.name);
+  moduleStore.applyLayers = raw ? raw.applyLayers : APPLY_LAYER_NAMES.slice();
   moduleStore.applyRequiredLayers = raw
     ? raw.applyRequiredLayers
     : MCD_SMART_LAYER_NAMES.slice();
@@ -1672,10 +1701,10 @@ function findNamedLayer(container, name) {
 }
 
 // 回傳找得到的 $ 圖層；required 內的圖層缺少時丟錯（Resize 需要全部六個，套圖依「必選」設定）
-function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES) {
+function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
   const layers = {};
   const missing = [];
-  for (const name of MCD_SMART_LAYER_NAMES) {
+  for (const name of names) {
     const layer = findNamedLayer(container, name);
     if (layer) {
       layers[name] = layer;
@@ -1689,11 +1718,11 @@ function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES) {
   return layers;
 }
 
-function getMcdSourceContainer(doc, required = MCD_SMART_LAYER_NAMES) {
+function getMcdSourceContainer(doc, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
   const boards = listArtboards(doc);
   for (const board of boards) {
     try {
-      requireMcdSmartLayers(board, required);
+      requireMcdSmartLayers(board, required, names);
       return board;
     } catch (_error) {
       // 不完整的工作區域略過，改找下一層或整份文件
@@ -2235,9 +2264,9 @@ function closeLeftoverPreviewDocuments() {
   );
 }
 
-async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES) {
-  const sourceContainer = getMcdSourceContainer(master, required);
-  const sourceLayers = requireMcdSmartLayers(sourceContainer, required);
+async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+  const sourceContainer = getMcdSourceContainer(master, required, names);
+  const sourceLayers = requireMcdSmartLayers(sourceContainer, required, names);
   const presentNames = Object.keys(sourceLayers);
   const order = listMcdLayersBottomToTop(sourceContainer, sourceLayers).map((layer) =>
     presentNames.find((name) => sourceLayers[name].id === layer.id),
@@ -2256,7 +2285,7 @@ async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES) {
         try {
           // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
           const file = await tempFolder.createFile(
-            `preview-${master.id}-${name.replace("$", "")}.png`,
+            `preview-${master.id}-${presentNames.indexOf(name)}.png`,
             { overwrite: true },
           );
           const size = await exportLayerPreviewPng(master, sourceLayers[name], file, name);
@@ -2299,15 +2328,17 @@ async function whilePhotoshopBusy(task) {
 // 兩個分頁共用同一份擷取結果，避免同一份母版重複匯出
 const previewCacheByMaster = new Map();
 
-function getPreviewCache(master, force, required) {
-  if (!force && previewCacheByMaster.has(master.id)) {
-    return previewCacheByMaster.get(master.id);
+function getPreviewCache(master, force, required, names = MCD_SMART_LAYER_NAMES) {
+  // 套圖的圖層清單可自訂，依圖層清單分開快取
+  const key = `${master.id}|${names.slice().sort().join("|")}`;
+  if (!force && previewCacheByMaster.has(key)) {
+    return previewCacheByMaster.get(key);
   }
-  const pending = whilePhotoshopBusy(() => buildPreviewCache(master, required)).catch((error) => {
-    previewCacheByMaster.delete(master.id);
+  const pending = whilePhotoshopBusy(() => buildPreviewCache(master, required, names)).catch((error) => {
+    previewCacheByMaster.delete(key);
     throw error;
   });
-  previewCacheByMaster.set(master.id, pending);
+  previewCacheByMaster.set(key, pending);
   return pending;
 }
 
@@ -2584,7 +2615,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     master: null,
     templateIndex: 0,
     variantIndex: 0,
-    elementName: MCD_POSITION_ELEMENT_NAMES[0],
+    elementName: mode.editableNames()[0],
     previewCache: null,
     drag: null,
     images: {},
@@ -2661,7 +2692,33 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (name === "$BG" && !variant.elements.$BG) {
       return coverSpec();
     }
-    return variant.elements[name];
+    return variant.elements[name] || defaultSpecFor(name);
+  }
+
+  // 套圖新增的圖層在舊的版面裡沒有設定值：有母版就用 PSD 原稿位置，否則用預設框
+  function ensureVariantElements(template) {
+    if (!isApply || !template || !template.values) {
+      return;
+    }
+    let measured = null;
+    for (const variant of template.values.variants) {
+      for (const name of mode.positionNames()) {
+        if (variant.elements[name]) {
+          continue;
+        }
+        if (!measured) {
+          measured = {};
+          if (isDocumentOpen(state.master)) {
+            try {
+              measured = mode.initialValues(state.master).variants[0].elements;
+            } catch (_error) {
+              // 量不到就用預設框
+            }
+          }
+        }
+        variant.elements[name] = measured[name] ? deepClone(measured[name]) : defaultSpecFor(name);
+      }
+    }
   }
 
   function currentSpec() {
@@ -2688,10 +2745,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         : 0;
     }
     const template = currentTemplate();
+    const editable = mode.editableNames();
+    if (!editable.includes(state.elementName)) {
+      state.elementName = editable[0];
+    }
     if (template && !template.values.variants.length) {
       // 沒有任何版型時先放一個未命名草稿，讓使用者可以直接拖拉再命名
       template.values.variants.push(newDraftVariant());
     }
+    ensureVariantElements(template);
     const variants = template ? template.values.variants.length : 0;
     state.variantIndex = variants
       ? Math.min(Math.max(state.variantIndex, 0), variants - 1)
@@ -2835,8 +2897,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function renderElementPicker() {
-    fillPicker(elementPicker, EDITABLE_ELEMENT_NAMES);
-    setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(state.elementName));
+    fillPicker(elementPicker, mode.editableNames());
+    setPickerIndex(elementPicker, mode.editableNames().indexOf(state.elementName));
   }
 
   function updateVariantNameValidity() {
@@ -2965,16 +3027,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function effectiveLayerOrder() {
     const variant = currentVariant();
+    const names = mode.positionNames();
     if (variant && variant.order) {
-      return variant.order;
+      // 套圖的圖層清單可能改過：去掉已刪除的、新增的放最上面
+      const kept = variant.order.filter((name) => names.includes(name));
+      return [...kept, ...names.filter((name) => !kept.includes(name))];
     }
     // 未設定時沿用母版的堆疊順序
     const fromMaster = state.previewCache
-      ? state.previewCache.order.filter((name) => name !== "$BG")
+      ? state.previewCache.order.filter((name) => names.includes(name))
       : [];
-    return fromMaster.length === MCD_POSITION_ELEMENT_NAMES.length
-      ? fromMaster
-      : MCD_POSITION_ELEMENT_NAMES.slice();
+    return fromMaster.length === names.length ? fromMaster : names.slice();
   }
 
   function zIndexFor(name, fallbackIndex) {
@@ -3090,8 +3153,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       if (variant === source) {
         continue;
       }
-      for (const name of MCD_POSITION_ELEMENT_NAMES) {
-        variant.elements[name] = deepClone(source.elements[name]);
+      for (const name of mode.positionNames()) {
+        if (source.elements[name]) {
+          variant.elements[name] = deepClone(source.elements[name]);
+        }
       }
       if (source.elements.$BG) {
         variant.elements.$BG = deepClone(source.elements.$BG);
@@ -3170,7 +3235,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     setStatus("擷取圖層中，請稍候…");
     try {
-      const cache = await getPreviewCache(master, force, mode.required());
+      const cache = await getPreviewCache(master, force, mode.required(), mode.layerNames());
       // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
       if (!state.master || state.master.id !== master.id) {
         return; // 擷取期間已切換母版
@@ -3193,7 +3258,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     commitFields();
     state.elementName = name;
-    setPickerIndex(elementPicker, EDITABLE_ELEMENT_NAMES.indexOf(name));
+    setPickerIndex(elementPicker, mode.editableNames().indexOf(name));
     loadFields();
     updateHighlight();
   }
@@ -3344,9 +3409,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     commitFields();
     let count = 0;
-    for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    for (const name of mode.positionNames()) {
       const spec = variant.elements[name];
-      if (!hasFrameHeight(spec)) {
+      if (spec && !hasFrameHeight(spec)) {
         spec.heightPercent = roundTo(naturalHeightPercent(name, spec), 2);
         count += 1;
       }
@@ -3648,7 +3713,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   elementPicker.addEventListener("change", (event) => {
     commitFields();
-    state.elementName = EDITABLE_ELEMENT_NAMES[readPickerIndex(event)];
+    state.elementName = mode.editableNames()[readPickerIndex(event)];
     loadFields();
     updateHighlight();
   });
@@ -3801,7 +3866,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.draft = null;
     state.templateIndex = Math.max(existing, 0);
     state.variantIndex = 0;
-    state.elementName = MCD_POSITION_ELEMENT_NAMES[0];
+    state.elementName = mode.editableNames()[0];
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
     variantNameInput.value = "";
@@ -3830,28 +3895,57 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const layerToggle = el("layer-toggle");
     const layerPanel = el("layer-panel");
     const srcInput = el("src-path");
-    const requiredDialog = el("required-dialog");
+    // 套圖圖層下拉的勾選框依圖層清單產生：name -> checkbox
+    let layerBoxes = new Map();
 
     // UXP 不支援 z-index：把下拉清單移到分頁最後，打開時依按鈕位置定位
     root.appendChild(layerPanel);
 
     function presentLayers() {
+      const names = applyLayerNames();
       if (!isDocumentOpen(state.master)) {
-        return APPLY_LAYER_NAMES;
+        return names;
       }
       try {
         const required = applyRequiredLayers();
-        return Object.keys(requireMcdSmartLayers(getMcdSourceContainer(state.master, required), required));
+        return Object.keys(
+          requireMcdSmartLayers(getMcdSourceContainer(state.master, required, names), required, names),
+        );
       } catch (_error) {
-        return APPLY_LAYER_NAMES;
+        return names;
       }
     }
 
     function checkedLayers() {
-      return APPLY_LAYER_NAMES.filter((name) => {
-        const box = layerPanel.querySelector(`[data-layer-name="${name}"]`);
+      return applyLayerNames().filter((name) => {
+        const box = layerBoxes.get(name);
         return box && box.checked;
       });
+    }
+
+    function onLayerChecked() {
+      updateToggleLabel();
+      commit();
+      resetOutputs();
+      renderVariantPicker();
+      renderPreview();
+    }
+
+    function renderLayerPanel() {
+      layerPanel.innerHTML = "";
+      layerBoxes = new Map();
+      for (const name of applyLayerNames()) {
+        const label = document.createElement("label");
+        label.className = "layer-check";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.setAttribute("data-layer-name", name);
+        box.addEventListener("change", onLayerChecked);
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(name));
+        layerPanel.appendChild(label);
+        layerBoxes.set(name, box);
+      }
     }
 
     function updateToggleLabel() {
@@ -3863,8 +3957,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const template = currentTemplate();
       const layers = (template && template.layers) || [];
       const present = presentLayers();
-      layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
-        const name = box.getAttribute("data-layer-name");
+      renderLayerPanel();
+      layerBoxes.forEach((box, name) => {
         box.checked = layers.includes(name);
         box.disabled = !present.includes(name);
         box.parentElement.classList.toggle("is-missing", box.disabled);
@@ -4043,26 +4137,238 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       renderPreview();
     }
 
-    async function openRequiredDialog() {
-      const required = applyRequiredLayers();
-      requiredDialog.querySelectorAll("[data-required-name]").forEach((box) => {
-        box.checked = required.includes(box.getAttribute("data-required-name"));
+    // ----- 圖層「編輯」：套圖可用的圖層清單；勾選＝PSD 必須有（必選） -----
+
+    const layerList = {
+      dialog: el("layer-list-dialog"),
+      list: el("layer-list"),
+      listView: el("layer-list-view"),
+      deleteView: el("layer-delete-view"),
+      deleteText: el("layer-delete-text"),
+      rows: [],
+      pendingDelete: null,
+    };
+
+    function showLayerListView(confirmDelete) {
+      layerList.listView.style.display = confirmDelete ? "none" : "block";
+      layerList.deleteView.style.display = confirmDelete ? "block" : "none";
+    }
+
+    function layerRowButton(label, disabled, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "small-btn";
+      button.textContent = label;
+      button.disabled = disabled;
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function renderLayerList() {
+      layerList.list.innerHTML = "";
+      const { rows } = layerList;
+      rows.forEach((row) => {
+        const line = document.createElement("div");
+        line.className = "manager-row";
+
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = row.required;
+        check.addEventListener("change", () => {
+          row.required = check.checked;
+        });
+        line.appendChild(check);
+
+        if (row.editing) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "text-input manager-name";
+          input.placeholder = "輸入圖層名稱";
+          input.value = row.name;
+          input.classList.toggle("is-invalid", row.invalid);
+          input.addEventListener("input", () => {
+            row.name = input.value;
+            row.invalid = false;
+            input.classList.remove("is-invalid");
+          });
+          line.appendChild(input);
+        } else {
+          const label = document.createElement("span");
+          label.className = "manager-name";
+          label.textContent = row.name;
+          // 點名稱也可以直接改名
+          label.addEventListener("click", () => {
+            row.editing = true;
+            renderLayerList();
+          });
+          line.appendChild(label);
+        }
+
+        line.appendChild(
+          layerRowButton("編輯", row.editing, () => {
+            row.editing = true;
+            renderLayerList();
+          }),
+        );
+        line.appendChild(
+          layerRowButton("刪除", rows.length <= 1, () => {
+            if (!row.original) {
+              // 還沒儲存的新圖層直接拿掉
+              layerList.rows = rows.filter((item) => item !== row);
+              renderLayerList();
+              return;
+            }
+            layerList.pendingDelete = row;
+            layerList.deleteText.textContent = `請問確認刪除圖層「${row.original}」嗎？`;
+            showLayerListView(true);
+          }),
+        );
+        layerList.list.appendChild(line);
       });
-      if (!(await showDialog(requiredDialog, "必選圖層"))) {
+    }
+
+    function openLayerList() {
+      commitFields();
+      const required = applyRequiredLayers();
+      layerList.rows = applyLayerNames().map((name) => ({
+        original: name,
+        name,
+        required: required.includes(name),
+        editing: false,
+        invalid: false,
+      }));
+      layerList.pendingDelete = null;
+      renderLayerList();
+      showLayerListView(false);
+      showDialog(layerList.dialog, "編輯圖層", {
+        resize: "both",
+        size: { width: 460, height: 380 },
+      });
+    }
+
+    function addLayerRow() {
+      layerList.rows.push({
+        original: null,
+        name: "",
+        required: false,
+        editing: true,
+        invalid: false,
+      });
+      renderLayerList();
+    }
+
+    // 模組資料（含尚未新增的草稿）裡的圖層名稱一起改／刪
+    function eachApplyTemplate(callback) {
+      const list = templates().slice();
+      if (state.draft && !list.includes(state.draft)) {
+        list.push(state.draft);
+      }
+      list.forEach(callback);
+    }
+
+    function renameLayerData(renames) {
+      const mapName = (name) => (renames.has(name) ? renames.get(name) : name);
+      eachApplyTemplate((template) => {
+        if (Array.isArray(template.layers)) {
+          template.layers = template.layers.map(mapName);
+        }
+        const variants = template.values ? template.values.variants : [];
+        variants.forEach((variant) => {
+          const elements = {};
+          Object.keys(variant.elements).forEach((name) => {
+            elements[mapName(name)] = variant.elements[name];
+          });
+          variant.elements = elements;
+          if (Array.isArray(variant.order)) {
+            variant.order = variant.order.map(mapName);
+          }
+        });
+      });
+      state.elementName = mapName(state.elementName);
+    }
+
+    function removeLayerData(name) {
+      eachApplyTemplate((template) => {
+        if (Array.isArray(template.layers)) {
+          template.layers = template.layers.filter((item) => item !== name);
+        }
+        const variants = template.values ? template.values.variants : [];
+        variants.forEach((variant) => {
+          delete variant.elements[name];
+          if (Array.isArray(variant.order)) {
+            variant.order = variant.order.filter((item) => item !== name);
+          }
+        });
+      });
+    }
+
+    async function confirmDeleteLayer() {
+      const row = layerList.pendingDelete;
+      layerList.pendingDelete = null;
+      showLayerListView(false);
+      if (!row) {
         return;
       }
-      moduleStore.applyRequiredLayers = APPLY_LAYER_NAMES.filter((name) => {
-        const box = requiredDialog.querySelector(`[data-required-name="${name}"]`);
-        return box && box.checked;
+      layerList.rows = layerList.rows.filter((item) => item !== row);
+      moduleStore.applyLayers = applyLayerNames().filter((name) => name !== row.original);
+      moduleStore.applyRequiredLayers = (moduleStore.applyRequiredLayers || []).filter(
+        (name) => name !== row.original,
+      );
+      removeLayerData(row.original);
+      renderLayerList();
+      await persist(`已刪除圖層「${row.original}」`);
+      reopenAfterLayerChange();
+    }
+
+    async function saveLayerList() {
+      const { rows } = layerList;
+      let valid = true;
+      rows.forEach((row, i) => {
+        const name = row.name.trim();
+        const duplicate = rows.some((other, j) => j !== i && other.name.trim() === name);
+        row.invalid = !name || duplicate;
+        if (row.invalid) {
+          row.editing = true;
+          valid = false;
+        }
       });
-      await persist("已儲存必選圖層", "已儲存必選圖層");
+      if (!valid || !rows.length) {
+        renderLayerList();
+        return;
+      }
+      const renames = new Map();
+      rows.forEach((row) => {
+        const name = row.name.trim();
+        if (row.original && row.original !== name) {
+          renames.set(row.original, name);
+        }
+      });
+      const added = rows.filter((row) => !row.original).length;
+      renameLayerData(renames);
+      moduleStore.applyLayers = rows.map((row) => row.name.trim());
+      moduleStore.applyRequiredLayers = rows
+        .filter((row) => row.required)
+        .map((row) => row.name.trim());
+      layerList.dialog.close("save");
+      await persist(
+        added ? `已新增 ${added} 個圖層` : "已儲存圖層設定",
+        added ? "新增成功" : "已儲存圖層設定",
+      );
+      reopenAfterLayerChange();
+    }
+
+    // 圖層清單或必選改了：重新檢查母版並重新擷取預覽
+    function reopenAfterLayerChange() {
       const candidate = isDocumentOpen(state.master) ? state.master : app.activeDocument;
       const doc = mode.validMaster(candidate);
       if (doc) {
         open(doc, "");
         refreshPreview(true);
-      } else if (candidate) {
-        setStatus(mode.masterProblem(candidate));
+      } else {
+        renderAll();
+        if (candidate) {
+          setStatus(mode.masterProblem(candidate));
+        }
       }
     }
 
@@ -4083,15 +4389,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     document.addEventListener("click", () => {
       layerPanel.style.display = "none";
     });
-    layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
-      box.addEventListener("change", () => {
-        updateToggleLabel();
-        commit();
-        resetOutputs();
-        renderVariantPicker();
-        renderPreview();
-      });
-    });
     srcInput.addEventListener("change", () => {
       commit();
       resetOutputs();
@@ -4100,9 +4397,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     });
     el("btn-pick-src").addEventListener("click", pickSrcFolder);
     el("btn-preview-apply").addEventListener("click", previewApply);
-    el("btn-required").addEventListener("click", openRequiredDialog);
-    el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
-    el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
+    el("btn-edit-layers").addEventListener("click", openLayerList);
+    el("btn-layer-add").addEventListener("click", addLayerRow);
+    el("btn-layer-list-save").addEventListener("click", saveLayerList);
+    el("btn-layer-list-cancel").addEventListener("click", () => layerList.dialog.close("cancel"));
+    el("btn-layer-delete-confirm").addEventListener("click", confirmDeleteLayer);
+    el("btn-layer-delete-cancel").addEventListener("click", () => {
+      layerList.pendingDelete = null;
+      showLayerListView(false);
+    });
 
     return { load, commit, resetOutputs, replacementFor, showOutput, generate, variantForSet };
   }
@@ -4126,16 +4429,43 @@ const APPLY_LAYER_NAMES = ["$LOGO", "$PROD", "$HEAD", "$CTA", "$SM", "$BG"];
 const APPLY_IMAGE_PATTERN = /\.(jpe?g|png|psd|psb|tiff?|webp|gif|bmp)$/i;
 const SRC_FOLDER_TOKENS_KEY = "bannerResizer.srcFolderTokens";
 
-// 未設定（舊的 module.json）時六個都必須；設定過就照清單（可以是空的）
-function normalizeRequiredLayers(raw) {
+// 套圖的圖層清單：不重複、非空白的名稱；未設定（舊的 module.json）時用預設六個
+function normalizeApplyLayers(raw) {
   if (!Array.isArray(raw)) {
-    return MCD_SMART_LAYER_NAMES.slice();
+    return APPLY_LAYER_NAMES.slice();
   }
-  return APPLY_LAYER_NAMES.filter((name) => raw.includes(name));
+  const out = [];
+  for (const item of raw) {
+    const name = String(item == null ? "" : item).trim();
+    if (name && !out.includes(name)) {
+      out.push(name);
+    }
+  }
+  return out.length ? out : APPLY_LAYER_NAMES.slice();
+}
+
+function applyLayerNames() {
+  return moduleStore.applyLayers || APPLY_LAYER_NAMES;
+}
+
+// 套圖的可設定位置圖層（$BG 另外處理）
+function applyPositionNames() {
+  return applyLayerNames().filter((name) => name !== "$BG");
+}
+
+// 未設定（舊的 module.json）時六個都必須；設定過就照清單（可以是空的）
+function normalizeRequiredLayers(raw, names = APPLY_LAYER_NAMES) {
+  if (!Array.isArray(raw)) {
+    return MCD_SMART_LAYER_NAMES.filter((name) => names.includes(name));
+  }
+  return names.filter((name) => raw.includes(name));
 }
 
 function applyRequiredLayers() {
-  return moduleStore.applyRequiredLayers || MCD_SMART_LAYER_NAMES;
+  const names = applyLayerNames();
+  return (moduleStore.applyRequiredLayers || MCD_SMART_LAYER_NAMES).filter((name) =>
+    names.includes(name),
+  );
 }
 
 // 套圖用的母版檢查：只要求「必選」勾選的圖層存在
@@ -4144,8 +4474,9 @@ function validApplyMasterOrNull(doc) {
     return null;
   }
   const required = applyRequiredLayers();
+  const names = applyLayerNames();
   try {
-    requireMcdSmartLayers(getMcdSourceContainer(doc, required), required);
+    requireMcdSmartLayers(getMcdSourceContainer(doc, required, names), required, names);
     return doc;
   } catch (_error) {
     return null;
@@ -4154,11 +4485,12 @@ function validApplyMasterOrNull(doc) {
 
 function applyMasterProblem(doc) {
   const required = applyRequiredLayers();
+  const names = applyLayerNames();
   try {
-    requireMcdSmartLayers(getMcdSourceContainer(doc, required), required);
+    requireMcdSmartLayers(getMcdSourceContainer(doc, required, names), required, names);
     return "";
   } catch (error) {
-    return `${error.message || error}（可按「必選」調整必須有的圖層）`;
+    return `${error.message || error}（可按「圖層」旁的「編輯」調整必選的圖層）`;
   }
 }
 
@@ -4167,7 +4499,7 @@ function normalizeApplyTemplate(raw) {
     return null;
   }
   const layers = Array.isArray(raw.layers)
-    ? APPLY_LAYER_NAMES.filter((name) => raw.layers.includes(name))
+    ? normalizeApplyLayers(raw.layers).filter((name) => raw.layers.includes(name))
     : [];
   const out = {
     name: String(raw.name || "").trim(),
@@ -4182,6 +4514,14 @@ function normalizeApplyTemplate(raw) {
     if (!out.values.variants.length) {
       out.values.variants.push({ outputDocument: "預設", elements: deepClone(DEFAULT_VARIANT_ELEMENTS) });
     }
+    // 層級順序可含自訂圖層，不套用 Resize 的五個圖層限制
+    const rawVariants = Array.isArray(raw.values.variants) ? raw.values.variants : [];
+    out.values.variants.forEach((variant, index) => {
+      const order = rawVariants[index] && rawVariants[index].order;
+      if (Array.isArray(order) && order.every((name) => typeof name === "string")) {
+        variant.order = order.filter((name, i) => order.indexOf(name) === i);
+      }
+    });
   }
   return out;
 }
@@ -4191,9 +4531,9 @@ function normalizeApplyTemplate(raw) {
  * 各組換圖第一次選到時從「預設」複製一份自己的版面，可再用「同步圖層」統一。
  */
 function applyInitialValues(doc) {
-  const measured = measureLayerFrames(doc, applyRequiredLayers());
+  const measured = measureLayerFrames(doc, applyRequiredLayers(), applyLayerNames());
   const elements = {};
-  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+  for (const name of applyPositionNames()) {
     const frame = measured.frames[name];
     // 框＝原圖層的位置與大小：換上的圖等比塞進這個框並置中
     elements[name] = frame
@@ -4204,7 +4544,7 @@ function applyInitialValues(doc) {
           heightPercent: roundTo(frame.height, 2),
           centered: true,
         }
-      : deepClone(DEFAULT_VARIANT_ELEMENTS[name]);
+      : defaultSpecFor(name);
   }
   if (measured.frames.$BG) {
     elements.$BG = {
@@ -4301,9 +4641,9 @@ async function collectApplySets(folder, layerNames) {
 }
 
 // 各圖層在原稿畫布上的位置（百分比），畫布＝含齊圖層的工作區域或整份文件
-function measureLayerFrames(master, required = MCD_SMART_LAYER_NAMES) {
-  const container = getMcdSourceContainer(master, required);
-  const layers = requireMcdSmartLayers(container, required);
+function measureLayerFrames(master, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+  const container = getMcdSourceContainer(master, required, names);
+  const layers = requireMcdSmartLayers(container, required, names);
   const frame =
     container === master
       ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
@@ -4539,7 +4879,8 @@ async function generateApplyDocuments(master, sets, variantFor) {
         app.activeDocument = copy;
         try {
           const required = applyRequiredLayers();
-          const container = getMcdSourceContainer(copy, required);
+          const names = applyLayerNames();
+          const container = getMcdSourceContainer(copy, required, names);
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
             if (!layer) {
@@ -4554,7 +4895,7 @@ async function generateApplyDocuments(master, sets, variantFor) {
               container === copy
                 ? { left: 0, top: 0, right: unitNumber(copy.width), bottom: unitNumber(copy.height) }
                 : readLayerBounds(container);
-            const layers = requireMcdSmartLayers(container, required);
+            const layers = requireMcdSmartLayers(container, required, names);
             for (const name of Object.keys(layers)) {
               const spec = variant.elements[name];
               if (spec) {
@@ -4589,6 +4930,9 @@ const RESIZE_MODE = {
   kind: "resize",
   templates: () => moduleStore.templates,
   required: () => MCD_SMART_LAYER_NAMES,
+  layerNames: () => MCD_SMART_LAYER_NAMES,
+  positionNames: () => MCD_POSITION_ELEMENT_NAMES,
+  editableNames: () => EDITABLE_ELEMENT_NAMES,
   validMaster: validMasterOrNull,
   masterProblem: (doc) => {
     try {
@@ -4607,6 +4951,10 @@ const APPLY_MODE = {
   kind: "apply",
   templates: () => moduleStore.applyTemplates,
   required: applyRequiredLayers,
+  layerNames: applyLayerNames,
+  positionNames: applyPositionNames,
+  // 面板「圖層」下拉＝圖層清單的順序
+  editableNames: applyLayerNames,
   validMaster: validApplyMasterOrNull,
   masterProblem: applyMasterProblem,
   // 套圖的預設版面＝PSD 原稿的位置與大小
@@ -4714,7 +5062,11 @@ function parseModuleJsonText(text) {
   return {
     templates,
     applyTemplates,
-    applyRequiredLayers: normalizeRequiredLayers(data.applyRequiredLayers),
+    applyLayers: normalizeApplyLayers(data.applyLayers),
+    applyRequiredLayers: normalizeRequiredLayers(
+      data.applyRequiredLayers,
+      normalizeApplyLayers(data.applyLayers),
+    ),
     reference: normalizeReference(data.reference),
   };
 }
@@ -4777,11 +5129,13 @@ document.getElementById("btn-json-confirm-ok").addEventListener("click", async (
   const previous = {
     templates: moduleStore.templates,
     applyTemplates: moduleStore.applyTemplates,
+    applyLayers: moduleStore.applyLayers,
     applyRequiredLayers: moduleStore.applyRequiredLayers,
     reference: moduleStore.reference,
   };
   moduleStore.templates = pending.templates;
   moduleStore.applyTemplates = pending.applyTemplates;
+  moduleStore.applyLayers = pending.applyLayers;
   moduleStore.applyRequiredLayers = pending.applyRequiredLayers;
   moduleStore.reference = pending.reference;
   try {
@@ -4789,6 +5143,7 @@ document.getElementById("btn-json-confirm-ok").addEventListener("click", async (
   } catch (error) {
     moduleStore.templates = previous.templates;
     moduleStore.applyTemplates = previous.applyTemplates;
+    moduleStore.applyLayers = previous.applyLayers;
     moduleStore.applyRequiredLayers = previous.applyRequiredLayers;
     moduleStore.reference = previous.reference;
     jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
