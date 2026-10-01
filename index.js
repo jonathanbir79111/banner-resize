@@ -2453,6 +2453,8 @@ const SETTING_STEP = 0.1;
 const MIN_WIDTH_PERCENT = 1;
 const RESIZE_CORNERS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const HANDLE_SIZE = 10;
+const EMPTY_TEMPLATE_LABEL = "（請按「上傳.psd」）";
+const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -2700,6 +2702,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     return state.templateIndex < 0 && Boolean(state.draft);
   }
 
+  // 一開始（還沒按「上傳.psd」、也沒選模組）什麼都不帶入
+  function isNothingSelected() {
+    return state.templateIndex < 0 && !state.draft;
+  }
+
   function currentVariant() {
     const template = currentTemplate();
     return template ? template.values.variants[state.variantIndex] || null : null;
@@ -2776,10 +2783,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function clampSelection() {
     const count = templates().length;
-    if (!(state.templateIndex < 0 && state.draft)) {
-      state.templateIndex = count
-        ? Math.min(Math.max(state.templateIndex, 0), count - 1)
-        : 0;
+    if (state.templateIndex >= 0) {
+      state.templateIndex = count ? Math.min(state.templateIndex, count - 1) : -1;
     }
     const template = currentTemplate();
     const editable = mode.editableNames();
@@ -2901,14 +2906,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 下拉選單 -----
 
-  // 有草稿時下拉第 0 項是「（未新增）」草稿，其後才是各模組
+  // 有草稿時下拉第 0 項是「（未新增）」草稿；什麼都沒選時第 0 項是提示；其後才是各模組
   function pickerOffset() {
-    return state.draft ? 1 : 0;
+    return state.draft || isNothingSelected() ? 1 : 0;
   }
 
   function renderTemplatePicker() {
     const names = templates().map((template) => template.name || "（未命名模組）");
-    const labels = state.draft ? [state.draft.label, ...names] : names;
+    let labels = names;
+    if (state.draft) {
+      labels = [state.draft.label, ...names];
+    } else if (isNothingSelected()) {
+      labels = [EMPTY_TEMPLATE_LABEL, ...names];
+    }
     fillPicker(templatePicker, labels);
     if (labels.length) {
       setPickerIndex(templatePicker, state.templateIndex + pickerOffset());
@@ -2921,7 +2931,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const variants = template ? template.values.variants : [];
     // 套圖：預設 + 各組（每組有自己的版面，存在同名的 variant）
     const labels = isApply
-      ? [variantLabel(variants[0]), ...state.sets.map((set) => set.name)]
+      ? variants.length
+        ? [variantLabel(variants[0]), ...state.sets.map((set) => set.name)]
+        : []
       : variants.map(variantLabel);
     if (isApply) {
       el("btn-sync-sizes").style.display = state.sets.length ? "" : "none";
@@ -3262,7 +3274,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!isDocumentOpen(master)) {
       state.previewCache = null;
       renderPreview();
-      setStatus("請按「上傳.psd」或開啟母版後再按「開始執行」。");
+      setStatus(EMPTY_STATUS);
       return;
     }
     if (!force && state.previewCache && state.previewCache.masterId === master.id) {
@@ -3473,14 +3485,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     clampSelection();
 
-    // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
-    // 模組的來源 PSD 若已開啟，預覽改用它（只換面板的預覽來源，不切換 Photoshop 文件）
-    const template = currentTemplate();
-    const sourceDoc = findOpenDocumentForTemplate(template);
-    if (sourceDoc && mode.validMaster(sourceDoc)) {
-      state.master = sourceDoc;
-    }
-
+    // PSD 只由「上傳.psd」帶入，選模組不會自動改用 Photoshop 裡已開啟的檔案
     renderVariantPicker();
     loadFields();
     refreshPreview(false);
@@ -3801,6 +3806,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   el("btn-save-setting").addEventListener("click", async () => {
     commitFields();
+    if (!currentTemplate()) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
     if (isDraftSelected()) {
       await app.showAlert("請點選新增模組");
       return;
@@ -3815,6 +3824,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     commitFields();
     const template = currentTemplate();
     if (!template) {
+      await app.showAlert(EMPTY_STATUS);
       return;
     }
     if (isApply && isDraftSelected()) {
@@ -3907,7 +3917,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.master = master;
     const existing = master ? findTemplateIndexIn(templates(), master) : -1;
     state.draft = null;
-    state.templateIndex = Math.max(existing, 0);
+    // 沒有母版（剛按「開始執行」）時什麼都不選，等「上傳.psd」
+    state.templateIndex = master ? Math.max(existing, 0) : -1;
     state.variantIndex = 0;
     state.elementName = mode.editableNames()[0];
     templateNameInput.value = "";
@@ -3921,11 +3932,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function show() {
+    // 每個分頁的 PSD 都只由自己的「上傳.psd」帶入，不沿用 Photoshop 作用中的文件
     if (!isDocumentOpen(state.master)) {
-      // 另一個分頁上傳過母版時，沿用目前作用中的文件
-      state.master = mode.validMaster(app.activeDocument);
-    }
-    if (!state.master) {
       return;
     }
     // 分頁隱藏時量不到寬度，切回來再重新擷取或排版
@@ -4409,7 +4417,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     // 圖層清單或必選改了：重新檢查母版並重新擷取預覽
     function reopenAfterLayerChange() {
-      const candidate = isDocumentOpen(state.master) ? state.master : app.activeDocument;
+      const candidate = isDocumentOpen(state.master) ? state.master : null;
       const doc = mode.validMaster(candidate);
       if (doc) {
         open(doc, "");
@@ -5209,23 +5217,9 @@ document.getElementById("btn-json-confirm-ok").addEventListener("click", async (
 async function openResizeSettingsPanel() {
   await ensureModuleStore();
 
-  const active = app.activeDocument;
-  const master = validMasterOrNull(active);
-  let note = "";
-  if (active && !master) {
-    try {
-      requireMcdSmartLayers(getMcdSourceContainer(active));
-    } catch (error) {
-      note = `${error.message || error}；請按「上傳.psd」選擇母版。`;
-    }
-  }
-
-  if (master) {
-    await captureReferenceIfNeeded(master);
-  }
-  workspaces.resize.open(master, note);
-  const applyMaster = validApplyMasterOrNull(active);
-  workspaces.apply.open(applyMaster, active && !applyMaster ? applyMasterProblem(active) : "");
+  // 一開始兩個分頁都是空的，不帶入 Photoshop 裡已開啟的檔案；PSD 一律由「上傳.psd」帶入
+  workspaces.resize.open(null, EMPTY_STATUS);
+  workspaces.apply.open(null, EMPTY_STATUS);
   updateModuleFolderLabel();
   document.getElementById("btn-resize-1200x629").style.display = "none";
   document.getElementById("start-screen").style.display = "none";
