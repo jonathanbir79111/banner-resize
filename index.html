@@ -195,7 +195,6 @@
         flex: 1 1 0;
       }
 
-
       .preview-handle.is-ne,
       .preview-handle.is-sw {
         cursor: nesw-resize;
@@ -556,7 +555,9 @@
         <div class="preview-bar module-folder-bar" style="margin: 0 0 6px">
           <span id="module-folder-label" class="hint"></span>
           <button type="button" id="btn-edit-module-json">編輯</button>
-          <button type="button" id="btn-change-module-folder">變更資料夾</button>
+          <button type="button" id="btn-change-module-folder">
+            變更資料夾
+          </button>
         </div>
 
         <div class="tab-bar">
@@ -568,7 +569,11 @@
         <div data-workspace="resize">
           <div class="picker-title-row">
             <span class="picker-title">選擇模組</span>
-            <button type="button" class="small-btn" data-role="btn-manage-templates">
+            <button
+              type="button"
+              class="small-btn"
+              data-role="btn-manage-templates"
+            >
               編輯
             </button>
           </div>
@@ -585,11 +590,19 @@
               data-role="template-name"
               placeholder="模組名稱"
             />
-            <button type="button" class="small-btn" data-role="btn-add-template">
+            <button
+              type="button"
+              class="small-btn"
+              data-role="btn-add-template"
+            >
               新增
             </button>
           </div>
-          <p class="template-hint" data-role="template-hint" style="display: none">
+          <p
+            class="template-hint"
+            data-role="template-hint"
+            style="display: none"
+          >
             此 PSD 尚未建立模組，請點選「新增」
           </p>
 
@@ -609,7 +622,11 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">選擇Resize樣板</span>
-                <button type="button" class="small-btn" data-role="btn-manage-variants">
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-role="btn-manage-variants"
+                >
                   編輯
                 </button>
               </div>
@@ -620,7 +637,11 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
-                <button type="button" class="small-btn" data-role="btn-sync-sizes">
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-role="btn-sync-sizes"
+                >
                   同步圖層大小
                 </button>
               </div>
@@ -634,8 +655,12 @@
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
             <button type="button" data-role="btn-lock-heights">鎖定框高</button>
-            <button type="button" data-role="btn-reset-defaults">還原預設值</button>
-            <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
+            <button type="button" data-role="btn-reset-defaults">
+              還原預設值
+            </button>
+            <button type="button" data-role="btn-refresh-preview">
+              重新擷取圖層
+            </button>
           </div>
 
           <dialog data-role="sync-dialog">
@@ -677,7 +702,9 @@
                 </div>
                 <div data-role="variant-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="variant-manager-close" variant="secondary"
+                  <sp-button
+                    data-role="variant-manager-close"
+                    variant="secondary"
                     >關閉</sp-button
                   >
                   <sp-button data-role="variant-manager-save" variant="cta"
@@ -685,13 +712,20 @@
                   >
                 </div>
               </div>
-              <div data-role="variant-manager-confirm-view" style="display: none">
+              <div
+                data-role="variant-manager-confirm-view"
+                style="display: none"
+              >
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="variant-manager-delete-cancel" variant="secondary"
+                  <sp-button
+                    data-role="variant-manager-delete-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="variant-manager-delete-confirm" variant="cta"
+                  <sp-button
+                    data-role="variant-manager-delete-confirm"
+                    variant="cta"
                     >確認</sp-button
                   >
                 </div>
@@ -708,7 +742,9 @@
                 </div>
                 <div data-role="template-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="template-manager-close" variant="secondary"
+                  <sp-button
+                    data-role="template-manager-close"
+                    variant="secondary"
                     >關閉</sp-button
                   >
                   <sp-button data-role="template-manager-save" variant="cta"
@@ -716,13 +752,20 @@
                   >
                 </div>
               </div>
-              <div data-role="template-manager-confirm-view" style="display: none">
+              <div
+                data-role="template-manager-confirm-view"
+                style="display: none"
+              >
                 <p class="dialog-text">請問確認刪除這個模組嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="template-manager-delete-cancel" variant="secondary"
+                  <sp-button
+                    data-role="template-manager-delete-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="template-manager-delete-confirm" variant="cta"
+                  <sp-button
+                    data-role="template-manager-delete-confirm"
+                    variant="cta"
                     >確認</sp-button
                   >
                 </div>
@@ -735,8 +778,20 @@
               <label>靠左%</label>
               <input type="number" data-role="field-leftPercent" step="0.1" />
               <div class="stepper">
-                <button type="button" data-step-target="leftPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="leftPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="leftPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="leftPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
@@ -744,16 +799,40 @@
               <input type="number" data-role="field-topPercent" step="0.1" />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
-                <button type="button" data-step-target="topPercent" data-step-dir="down">▲</button>
-                <button type="button" data-step-target="topPercent" data-step-dir="up">▼</button>
+                <button
+                  type="button"
+                  data-step-target="topPercent"
+                  data-step-dir="down"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="topPercent"
+                  data-step-dir="up"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
               <input type="number" data-role="field-widthPercent" step="0.1" />
               <div class="stepper">
-                <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="widthPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="widthPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
@@ -765,17 +844,45 @@
                 placeholder="不限（隨圖層比例）"
               />
               <div class="stepper">
-                <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="heightPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="heightPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
               <label>層級</label>
               <div class="layer-buttons">
-                <button type="button" class="small-btn" data-layer-move="front">最前</button>
-                <button type="button" class="small-btn" data-layer-move="forward">往前</button>
-                <button type="button" class="small-btn" data-layer-move="backward">往後</button>
-                <button type="button" class="small-btn" data-layer-move="back">最後</button>
+                <button type="button" class="small-btn" data-layer-move="front">
+                  最前
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-layer-move="forward"
+                >
+                  往前
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-layer-move="backward"
+                >
+                  往後
+                </button>
+                <button type="button" class="small-btn" data-layer-move="back">
+                  最後
+                </button>
               </div>
             </div>
           </div>
@@ -801,7 +908,11 @@
         <div data-workspace="apply" style="display: none">
           <div class="picker-title-row">
             <span class="picker-title">選擇模組</span>
-            <button type="button" class="small-btn" data-role="btn-manage-templates">
+            <button
+              type="button"
+              class="small-btn"
+              data-role="btn-manage-templates"
+            >
               編輯
             </button>
           </div>
@@ -818,11 +929,19 @@
               data-role="template-name"
               placeholder="模組名稱"
             />
-            <button type="button" class="small-btn" data-role="btn-add-template">
+            <button
+              type="button"
+              class="small-btn"
+              data-role="btn-add-template"
+            >
               新增
             </button>
           </div>
-          <p class="template-hint" data-role="template-hint" style="display: none">
+          <p
+            class="template-hint"
+            data-role="template-hint"
+            style="display: none"
+          >
             此 PSD 尚未建立模組，請點選「新增」
           </p>
 
@@ -837,12 +956,29 @@
               新增
             </button>
           </div>
-
+          <div class="settings-fields" style="margin-top: 10px">
+            <div class="settings-field-row">
+              <label>圖檔src</label>
+              <input
+                type="text"
+                data-role="src-path"
+                placeholder="例：C:/Desktop/Jonathan/images/MCD（內含 PROD、CTA 等資料夾）"
+              />
+              <button type="button" class="small-btn" data-role="btn-pick-src">
+                選擇資料夾
+              </button>
+            </div>
+          </div>
           <div class="settings-row">
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">選擇套圖樣板</span>
-                <button type="button" class="small-btn" data-role="btn-manage-variants" style="display: none">
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-role="btn-manage-variants"
+                  style="display: none"
+                >
                   編輯
                 </button>
               </div>
@@ -854,10 +990,21 @@
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
                 <div class="title-buttons">
-                  <button type="button" class="small-btn" data-role="btn-sync-sizes" style="display: none">
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-sync-sizes"
+                    style="display: none"
+                  >
                     同步圖層
                   </button>
-                  <button type="button" class="small-btn" data-role="btn-edit-layers">編輯</button>
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-edit-layers"
+                  >
+                    編輯
+                  </button>
                 </div>
               </div>
               <sp-picker data-role="element-picker" size="m">
@@ -870,12 +1017,22 @@
             <div class="dialog-body manager-body">
               <div data-role="layer-list-view">
                 <div class="manager-row manager-head">
-                  <span class="manager-name">以下為必選的圖層（勾選＝PSD 必須有）</span>
-                  <button type="button" class="small-btn" data-role="btn-layer-add">新增</button>
+                  <span class="manager-name"
+                    >以下為必選的圖層（勾選＝PSD 必須有）</span
+                  >
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-layer-add"
+                  >
+                    新增
+                  </button>
                 </div>
                 <div data-role="layer-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-layer-list-cancel" variant="secondary"
+                  <sp-button
+                    data-role="btn-layer-list-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
                   <sp-button data-role="btn-layer-list-save" variant="cta"
@@ -884,9 +1041,13 @@
                 </div>
               </div>
               <div data-role="layer-delete-view" style="display: none">
-                <p class="dialog-text" data-role="layer-delete-text">請問確認刪除這個圖層嗎？</p>
+                <p class="dialog-text" data-role="layer-delete-text">
+                  請問確認刪除這個圖層嗎？
+                </p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-layer-delete-cancel" variant="secondary"
+                  <sp-button
+                    data-role="btn-layer-delete-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
                   <sp-button data-role="btn-layer-delete-confirm" variant="cta"
@@ -902,10 +1063,18 @@
               <div class="picker-title-row">
                 <span class="picker-title">套圖圖層（勾選要換圖的圖層）</span>
               </div>
-              <button type="button" class="layer-toggle" data-role="layer-toggle">
+              <button
+                type="button"
+                class="layer-toggle"
+                data-role="layer-toggle"
+              >
                 （尚未勾選圖層）
               </button>
-              <div class="layer-panel" data-role="layer-panel" style="display: none"></div>
+              <div
+                class="layer-panel"
+                data-role="layer-panel"
+                style="display: none"
+              ></div>
             </div>
           </div>
 
@@ -913,13 +1082,19 @@
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
             <button type="button" data-role="btn-lock-heights">鎖定框高</button>
-            <button type="button" data-role="btn-reset-defaults">還原預設值</button>
-            <button type="button" data-role="btn-refresh-preview">重新擷取圖層</button>
+            <button type="button" data-role="btn-reset-defaults">
+              還原預設值
+            </button>
+            <button type="button" data-role="btn-refresh-preview">
+              重新擷取圖層
+            </button>
           </div>
 
           <dialog data-role="sync-dialog">
             <div class="dialog-body">
-              <p class="dialog-text">請問要將目前的圖層大小與位置同步到全部套圖嗎?</p>
+              <p class="dialog-text">
+                請問要將目前的圖層大小與位置同步到全部套圖嗎?
+              </p>
               <div class="manager-actions">
                 <sp-button data-role="btn-sync-cancel" variant="secondary"
                   >取消</sp-button
@@ -956,7 +1131,9 @@
                 </div>
                 <div data-role="variant-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="variant-manager-close" variant="secondary"
+                  <sp-button
+                    data-role="variant-manager-close"
+                    variant="secondary"
                     >關閉</sp-button
                   >
                   <sp-button data-role="variant-manager-save" variant="cta"
@@ -964,13 +1141,20 @@
                   >
                 </div>
               </div>
-              <div data-role="variant-manager-confirm-view" style="display: none">
+              <div
+                data-role="variant-manager-confirm-view"
+                style="display: none"
+              >
                 <p class="dialog-text">請問確認刪除這個樣板嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="variant-manager-delete-cancel" variant="secondary"
+                  <sp-button
+                    data-role="variant-manager-delete-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="variant-manager-delete-confirm" variant="cta"
+                  <sp-button
+                    data-role="variant-manager-delete-confirm"
+                    variant="cta"
                     >確認</sp-button
                   >
                 </div>
@@ -987,7 +1171,9 @@
                 </div>
                 <div data-role="template-manager-list"></div>
                 <div class="manager-actions">
-                  <sp-button data-role="template-manager-close" variant="secondary"
+                  <sp-button
+                    data-role="template-manager-close"
+                    variant="secondary"
                     >關閉</sp-button
                   >
                   <sp-button data-role="template-manager-save" variant="cta"
@@ -995,13 +1181,20 @@
                   >
                 </div>
               </div>
-              <div data-role="template-manager-confirm-view" style="display: none">
+              <div
+                data-role="template-manager-confirm-view"
+                style="display: none"
+              >
                 <p class="dialog-text">請問確認刪除這個模組嗎？</p>
                 <div class="manager-actions">
-                  <sp-button data-role="template-manager-delete-cancel" variant="secondary"
+                  <sp-button
+                    data-role="template-manager-delete-cancel"
+                    variant="secondary"
                     >取消</sp-button
                   >
-                  <sp-button data-role="template-manager-delete-confirm" variant="cta"
+                  <sp-button
+                    data-role="template-manager-delete-confirm"
+                    variant="cta"
                     >確認</sp-button
                   >
                 </div>
@@ -1014,8 +1207,20 @@
               <label>靠左%</label>
               <input type="number" data-role="field-leftPercent" step="0.1" />
               <div class="stepper">
-                <button type="button" data-step-target="leftPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="leftPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="leftPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="leftPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
@@ -1023,16 +1228,40 @@
               <input type="number" data-role="field-topPercent" step="0.1" />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
-                <button type="button" data-step-target="topPercent" data-step-dir="down">▲</button>
-                <button type="button" data-step-target="topPercent" data-step-dir="up">▼</button>
+                <button
+                  type="button"
+                  data-step-target="topPercent"
+                  data-step-dir="down"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="topPercent"
+                  data-step-dir="up"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
               <input type="number" data-role="field-widthPercent" step="0.1" />
               <div class="stepper">
-                <button type="button" data-step-target="widthPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="widthPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="widthPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="widthPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
@@ -1044,35 +1273,48 @@
                 placeholder="不限（隨圖層比例）"
               />
               <div class="stepper">
-                <button type="button" data-step-target="heightPercent" data-step-dir="up">▲</button>
-                <button type="button" data-step-target="heightPercent" data-step-dir="down">▼</button>
+                <button
+                  type="button"
+                  data-step-target="heightPercent"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="heightPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
               </div>
             </div>
             <div class="settings-field-row">
               <label>層級</label>
               <div class="layer-buttons">
-                <button type="button" class="small-btn" data-layer-move="front">最前</button>
-                <button type="button" class="small-btn" data-layer-move="forward">往前</button>
-                <button type="button" class="small-btn" data-layer-move="backward">往後</button>
-                <button type="button" class="small-btn" data-layer-move="back">最後</button>
+                <button type="button" class="small-btn" data-layer-move="front">
+                  最前
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-layer-move="forward"
+                >
+                  往前
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-layer-move="backward"
+                >
+                  往後
+                </button>
+                <button type="button" class="small-btn" data-layer-move="back">
+                  最後
+                </button>
               </div>
             </div>
           </div>
-
-          <div class="settings-fields" style="margin-top: 10px">
-            <div class="settings-field-row">
-              <label>圖檔src</label>
-              <input
-                type="text"
-                data-role="src-path"
-                placeholder="例：C:/Desktop/Jonathan/images/MCD（內含 PROD、CTA 等資料夾）"
-              />
-              <button type="button" class="small-btn" data-role="btn-pick-src">
-                選擇資料夾
-              </button>
-            </div>
-          </div>
-
           <div class="settings-actions apply-actions" style="margin-top: 10px">
             <sp-button data-role="btn-preview-apply" variant="secondary"
               >預覽套圖</sp-button
@@ -1092,7 +1334,6 @@
             >
           </div>
         </div>
-
       </div>
       <div class="divider"></div>
       <!-- <p class="hint">尺寸,色碼,文字（同一 PSD、多個工作區域）</p>
@@ -1121,7 +1362,11 @@
     <dialog id="json-editor-dialog">
       <div class="dialog-body manager-body json-editor-body">
         <div id="json-editor-edit-view">
-          <textarea id="json-editor-text" class="json-editor-text" spellcheck="false"></textarea>
+          <textarea
+            id="json-editor-text"
+            class="json-editor-text"
+            spellcheck="false"
+          ></textarea>
           <p id="json-editor-error" class="json-editor-error"></p>
           <div class="manager-actions">
             <sp-button id="btn-json-cancel" variant="secondary">取消</sp-button>
@@ -1131,7 +1376,9 @@
         <div id="json-editor-confirm-view" style="display: none">
           <p class="dialog-text">確定儲存數值嗎？</p>
           <div class="manager-actions">
-            <sp-button id="btn-json-confirm-cancel" variant="secondary">取消</sp-button>
+            <sp-button id="btn-json-confirm-cancel" variant="secondary"
+              >取消</sp-button
+            >
             <sp-button id="btn-json-confirm-ok" variant="cta">確定</sp-button>
           </div>
         </div>
