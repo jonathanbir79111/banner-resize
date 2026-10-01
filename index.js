@@ -4494,11 +4494,17 @@ async function replaceLayerImage(layer, imageFile) {
   if (!isSmartObject(layer)) {
     throw new Error(`${layer.name} 不是智慧型物件，無法替換圖片`);
   }
+  const originalName = layer.name;
   const before = boundsBox(layer);
   await selectOnlyLayer(layer);
   const token = localFileSystem.createSessionToken(imageFile);
   await action.batchPlay(
     [{ _obj: "placedLayerReplaceContents", null: { _path: token, _kind: "local" } }],
+    { synchronousExecution: true },
+  );
+  // 「取代內容」會把圖層改名成新圖檔的檔名（$CTA → 01），改回原名，後續才找得到
+  await action.batchPlay(
+    [{ _obj: "set", _target: [{ _ref: "layer", _id: layer.id }], to: { _obj: "layer", name: originalName } }],
     { synchronousExecution: true },
   );
   const after = boundsBox(layer);
