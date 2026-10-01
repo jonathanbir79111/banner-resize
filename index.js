@@ -1919,6 +1919,15 @@ function findOpenDocumentForTemplate(template) {
   return null;
 }
 
+function findOpenDocumentById(id) {
+  for (let i = 0; i < app.documents.length; i++) {
+    if (app.documents[i].id === id) {
+      return app.documents[i];
+    }
+  }
+  return null;
+}
+
 function findOpenDocumentByPath(path) {
   if (!path) {
     return null;
@@ -3484,10 +3493,78 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       applyExtras.load();
     }
     clampSelection();
-
-    // PSD 只由「上傳.psd」帶入，選模組不會自動改用 Photoshop 裡已開啟的檔案
     renderVariantPicker();
     loadFields();
+    loadTemplateSource(currentTemplate());
+  }
+
+  /**
+   * 每個模組記得自己的 PSD：選模組時預覽改用該模組的來源 PSD。
+   * 已在 Photoshop 開啟就直接用（不切換 Photoshop 文件）；沒開就依記錄的路徑開啟，
+   * 開不了（沒有權限或檔案已移動）時清空預覽並提示重新「上傳.psd」。
+   * 沒有來源的模組（內建「預設」）沿用目前的預覽 PSD。
+   */
+  async function loadTemplateSource(template) {
+    const request = (state.sourceRequest = (state.sourceRequest || 0) + 1);
+    if (template && template === state.draft) {
+      const doc = findOpenDocumentById(state.draft.draftFor);
+      if (doc) {
+        state.master = doc;
+      }
+      refreshPreview(false);
+      return;
+    }
+    if (!template || !template.source) {
+      refreshPreview(false);
+      return;
+    }
+    const opened = findOpenDocumentForTemplate(template);
+    if (opened) {
+      useTemplateMaster(opened, template);
+      return;
+    }
+    state.master = null;
+    state.previewCache = null;
+    renderPreview();
+    const fileName = template.source.fileName || "PSD";
+    setStatus(`開啟 ${fileName} 中…`);
+    const file = await resolveSrcFolder(template.source.path);
+    if (request !== state.sourceRequest) {
+      return; // 期間又選了別的模組
+    }
+    if (!file) {
+      setStatus(`找不到 ${fileName}，請按「上傳.psd」重新選擇這份 PSD。`);
+      return;
+    }
+    try {
+      const doc = await openPsdAsMaster(file);
+      if (request === state.sourceRequest) {
+        useTemplateMaster(doc, template);
+      }
+    } catch (error) {
+      if (request === state.sourceRequest) {
+        setStatus(`無法開啟 ${fileName}：${error.message || error}`);
+      }
+    }
+  }
+
+  async function useTemplateMaster(doc, template) {
+    const problem = mode.masterProblem(doc);
+    if (problem) {
+      state.master = null;
+      state.previewCache = null;
+      renderPreview();
+      setStatus(`${template.source.fileName}：${problem}`);
+      return;
+    }
+    if (!state.master || state.master.id !== doc.id) {
+      state.previewCache = null;
+    }
+    state.master = doc;
+    await mode.onMaster(doc);
+    if (applyExtras) {
+      applyExtras.load();
+    }
     refreshPreview(false);
   }
 
@@ -3512,8 +3589,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!file) {
       return;
     }
+    try {
+      // 記住這份 PSD 的授權，之後選它的模組時可以直接重新開啟
+      rememberSrcFolder(file.nativePath, await localFileSystem.createPersistentToken(file));
+    } catch (_error) {
+      // 記不住就等下次再上傳
+    }
 
     try {
+      state.sourceRequest = (state.sourceRequest || 0) + 1;
       const doc = await openPsdAsMaster(file);
       const problem = mode.masterProblem(doc);
       if (problem) {
@@ -4637,7 +4721,7 @@ function rememberSrcFolder(path, token) {
 }
 
 /**
- * 找到圖檔資料夾：先用「選擇資料夾」記住的授權，
+ * 找到圖檔資料夾（或上傳過的 PSD 檔）：先用「選擇資料夾」／「上傳.psd」記住的授權，
  * 再試直接用路徑開啟（需要 manifest 給 localFileSystem 完整權限，否則會被拒絕）。
  */
 async function resolveSrcFolder(path) {
