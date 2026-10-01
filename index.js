@@ -1571,30 +1571,66 @@ async function readModuleFile(folder) {
     return null;
   }
   // 解析失敗直接丟錯，不以預設值覆寫使用者的檔案
-  const data = JSON.parse(await file.read());
+  const data = unpackModuleData(JSON.parse(await file.read()));
   return {
-    templates: Array.isArray(data && data.templates) ? data.templates : [],
-    applyTemplates: Array.isArray(data && data.applyTemplates) ? data.applyTemplates : [],
-    applyLayers: normalizeApplyLayers(data && data.applyLayers),
+    templates: Array.isArray(data.templates) ? data.templates : [],
+    applyTemplates: Array.isArray(data.applyTemplates) ? data.applyTemplates : [],
+    applyLayers: normalizeApplyLayers(data.applyLayers),
     applyRequiredLayers: normalizeRequiredLayers(
-      data && data.applyRequiredLayers,
-      normalizeApplyLayers(data && data.applyLayers),
+      data.applyRequiredLayers,
+      normalizeApplyLayers(data.applyLayers),
     ),
-    reference: normalizeReference(data && data.reference),
+    reference: normalizeReference(data.reference),
+  };
+}
+
+/**
+ * module.json 的格式：
+ *   {
+ *     "resize":    { "templates": [Resize 模組…], "reference": {比例基準} },
+ *     "image-set": [套圖模組…],
+ *     "image-set-layers": { "layers": [套圖圖層清單], "required": [必選圖層] }
+ *   }
+ * 舊版（templates / applyTemplates / applyLayers / applyRequiredLayers / reference 放在最外層）
+ * 一樣讀得進來，下次存檔時改寫成新格式。
+ */
+function unpackModuleData(data) {
+  const source = data && typeof data === "object" ? data : {};
+  const resize = source.resize;
+  const resizeObject = resize && typeof resize === "object" && !Array.isArray(resize) ? resize : null;
+  const layerSettings =
+    source["image-set-layers"] && typeof source["image-set-layers"] === "object"
+      ? source["image-set-layers"]
+      : {};
+  let templates = source.templates;
+  if (resizeObject) {
+    templates = resizeObject.templates;
+  } else if (Array.isArray(resize)) {
+    templates = resize;
+  }
+  return {
+    templates,
+    reference: resizeObject && resizeObject.reference ? resizeObject.reference : source.reference,
+    applyTemplates: Array.isArray(source["image-set"]) ? source["image-set"] : source.applyTemplates,
+    applyLayers: layerSettings.layers !== undefined ? layerSettings.layers : source.applyLayers,
+    applyRequiredLayers:
+      layerSettings.required !== undefined ? layerSettings.required : source.applyRequiredLayers,
   };
 }
 
 function moduleFileContent() {
-  const content = {
-    templates: moduleStore.templates,
-    applyTemplates: moduleStore.applyTemplates,
-    applyLayers: applyLayerNames(),
-    applyRequiredLayers: moduleStore.applyRequiredLayers,
-  };
+  const resize = { templates: moduleStore.templates };
   if (moduleStore.reference) {
-    content.reference = moduleStore.reference;
+    resize.reference = moduleStore.reference;
   }
-  return content;
+  return {
+    resize,
+    "image-set": moduleStore.applyTemplates,
+    "image-set-layers": {
+      layers: applyLayerNames(),
+      required: moduleStore.applyRequiredLayers,
+    },
+  };
 }
 
 function normalizeReference(raw) {
@@ -2644,7 +2680,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         // 母版圖層不齊，等換母版再量
       }
     }
-    return template;
+    // 舊的套圖模組沒有版面、也還沒有母版可量：先當作沒有選取，開啟 PSD 後再補上
+    return template && template.values ? template : null;
   }
 
   // 預覽用的圖層圖片：套圖選了某一組時，勾選圖層改用那一組的圖（含寬高）
@@ -4078,10 +4115,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return;
       }
       state.sets = result.sets;
+      // 每一組的版面都記錄到 module.json（尚未新增的模組等按「新增」時一起存）
+      state.sets.forEach(variantForSet);
       await showOutput(1);
       renderVariantPicker();
       loadFields();
-      setStatus(`找到 ${result.sets.length} 組（${result.summary}）`);
+      const message = `找到 ${result.sets.length} 組（${result.summary}）`;
+      if (isDraftSelected()) {
+        setStatus(`${message}；請按「新增」把這個模組存進 module.json`);
+      } else {
+        await persist(message);
+      }
     }
 
     async function generate(template) {
@@ -4420,7 +4464,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
 // ---------- 套圖：依 PSD 原稿位置，把勾選的圖層換成資料夾裡的圖 ----------
 //
-// 套圖模組（module.json 的 applyTemplates，與 Resize 分開）：
+// 套圖模組（module.json 的 image-set，與 Resize 分開）：
 //   { name, source: { fileName, path }, layers: ["$PROD", "$CTA"], srcPath: "…/MCD" }
 // 圖檔資料夾結構：srcPath/PROD/01.jpg、02.jpg…；srcPath/CTA/01.jpg…（資料夾名稱＝圖層名去掉 $）
 // 第 n 組＝各圖層資料夾排序後的第 n 張，產出「套圖0n.psd」；某圖層沒有第 n 張時保留原圖。
@@ -5026,12 +5070,12 @@ onModuleStoreChanged(updateModuleFolderLabel);
 function parseModuleJsonText(text) {
   let data;
   try {
-    data = JSON.parse(text);
+    data = unpackModuleData(JSON.parse(text));
   } catch (error) {
     throw new Error(`JSON 格式錯誤：${error.message}`);
   }
-  if (!data || !Array.isArray(data.templates)) {
-    throw new Error("最外層需為 { \"templates\": [ ... ] }");
+  if (!Array.isArray(data.templates)) {
+    throw new Error("最外層需為 { \"resize\": { \"templates\": [ ... ] }, \"image-set\": [ ... ] }");
   }
   const names = new Set();
   const templates = data.templates.map((raw, index) => {
@@ -5050,7 +5094,7 @@ function parseModuleJsonText(text) {
     (raw, index) => {
       const template = normalizeApplyTemplate(raw);
       if (!template || !template.name) {
-        throw new Error(`applyTemplates 第 ${index + 1} 個模組缺少 name`);
+        throw new Error(`image-set 第 ${index + 1} 個模組缺少 name`);
       }
       if (applyNames.has(template.name)) {
         throw new Error(`套圖模組名稱重複：${template.name}`);
