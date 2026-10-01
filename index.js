@@ -3487,7 +3487,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   async function uploadPsd() {
-    if (masterNeedsTemplate()) {
+    // 已帶入 PSD、模組名稱也填好但還沒按「新增」才提醒；其餘直接開啟選擇檔案
+    const pendingDraft =
+      isDraftSelected() &&
+      templateNameInput.value.trim() &&
+      isDocumentOpen(state.master) &&
+      state.draft.draftFor === state.master.id;
+    if (pendingDraft) {
       await app.showAlert("請點選新增模組");
       return;
     }
