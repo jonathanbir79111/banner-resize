@@ -1293,6 +1293,10 @@ function normalizeFrameOptions(src, out) {
   if (src.heightPercent != null && Number.isFinite(h) && h > 0) {
     out.heightPercent = h;
   }
+  // 套圖：換上的圖在框內置中
+  if (src.centered === true) {
+    out.centered = true;
+  }
   return out;
 }
 
@@ -1333,6 +1337,9 @@ function hasFrameHeight(spec) {
 // 圖層在框內的位置自動決定（只有設定了高度% 且圖層被縮小時才看得出來）：
 // 框中心偏左靠左、偏右靠右、其餘置中；產品與背景垂直置中，其他靠上
 function resolveAlign(name, spec) {
+  if (spec.centered) {
+    return { alignX: "center", alignY: "middle" };
+  }
   const center = spec.leftPercent + spec.widthPercent / 2;
   return {
     alignX: center < 40 ? "left" : center > 60 ? "right" : "center",
@@ -1753,7 +1760,13 @@ async function createMcdDocumentFromMaster(
 }
 
 async function layoutSmartByPercents(layer, canvasW, canvasH, spec, name) {
-  // 等比放進框內（見 fitInFrame），框外不會超出
+  await layoutInFrame(layer, { left: 0, top: 0, right: canvasW, bottom: canvasH }, spec, name);
+}
+
+// 等比放進框內（見 fitInFrame），框外不會超出；frame 為畫布（工作區域或整份文件）的像素範圍
+async function layoutInFrame(layer, frame, spec, name) {
+  const canvasW = frame.right - frame.left;
+  const canvasH = frame.bottom - frame.top;
   const src = boundsBox(layer);
   const aspectPercent = (src.height / src.width) * (canvasW / canvasH);
   const rect = fitInFrame(name, spec, aspectPercent);
@@ -1763,8 +1776,8 @@ async function layoutSmartByPercents(layer, canvasW, canvasH, spec, name) {
   const fitted = boundsBox(layer);
   await translateLayer(
     layer,
-    (canvasW * rect.left) / 100 - fitted.left,
-    (canvasH * rect.top) / 100 - fitted.top,
+    frame.left + (canvasW * rect.left) / 100 - fitted.left,
+    frame.top + (canvasH * rect.top) / 100 - fitted.top,
   );
 }
 
@@ -2546,8 +2559,14 @@ function createListManager(config, ctx) {
   return { open };
 }
 
-function createResizeWorkspace(root) {
+/**
+ * Resize 與套圖共用同一個工作區（同一套預覽、拖拉、靠左／靠上／寬度／高度、層級）。
+ * mode 決定兩者不同的地方：模組清單、母版需要哪些圖層、新模組的預設版面、產出方式。
+ */
+function createResizeWorkspace(root, mode = RESIZE_MODE) {
   const el = (role) => root.querySelector(`[data-role="${role}"]`);
+  const isApply = mode.kind === "apply";
+  const templates = () => mode.templates();
   const fields = {
     leftPercent: el("field-leftPercent"),
     topPercent: el("field-topPercent"),
@@ -2570,7 +2589,12 @@ function createResizeWorkspace(root) {
     drag: null,
     images: {},
     selection: null,
+    // 套圖：按「預覽套圖」後的各組換圖（選擇套圖樣板＝預設 + 套圖01.psd…）
+    sets: [],
+    outputIndex: 0,
+    imageInfos: {},
   };
+  let applyExtras = null;
 
   const workspace = { root, open, show, commit: commitFields };
 
@@ -2581,7 +2605,27 @@ function createResizeWorkspace(root) {
     if (state.templateIndex < 0) {
       return state.draft;
     }
-    return moduleStore.templates[state.templateIndex] || null;
+    const template = templates()[state.templateIndex] || null;
+    if (template && !template.values && isDocumentOpen(state.master)) {
+      try {
+        template.values = mode.initialValues(state.master);
+      } catch (_error) {
+        // 母版圖層不齊，等換母版再量
+      }
+    }
+    return template;
+  }
+
+  // 預覽用的圖層圖片：套圖選了某一組時，勾選圖層改用那一組的圖（含寬高）
+  function layerImage(name) {
+    const cache = state.previewCache;
+    if (isApply && applyExtras) {
+      const replaced = applyExtras.replacementFor(name);
+      if (replaced) {
+        return replaced;
+      }
+    }
+    return (cache && cache.images[name]) || null;
   }
 
   function isDraftSelected() {
@@ -2595,7 +2639,7 @@ function createResizeWorkspace(root) {
 
   function coverSpec() {
     // 與 layoutObjectFitCover 相同：等比放大到鋪滿畫布並置中，換算成百分比
-    const info = state.previewCache && state.previewCache.images.$BG;
+    const info = layerImage("$BG");
     if (!info) {
       return { leftPercent: 0, topPercent: 0, widthPercent: 100 };
     }
@@ -2637,7 +2681,7 @@ function createResizeWorkspace(root) {
   }
 
   function clampSelection() {
-    const count = moduleStore.templates.length;
+    const count = templates().length;
     if (!(state.templateIndex < 0 && state.draft)) {
       state.templateIndex = count
         ? Math.min(Math.max(state.templateIndex, 0), count - 1)
@@ -2670,6 +2714,9 @@ function createResizeWorkspace(root) {
     const h = parseFloat(fields.heightPercent.value);
     if (state.elementName !== "$BG" && Number.isFinite(h) && h > 0) {
       out.heightPercent = h;
+    }
+    if (spec.centered) {
+      out.centered = true;
     }
     return out;
   }
@@ -2711,6 +2758,9 @@ function createResizeWorkspace(root) {
   }
 
   function commitFields() {
+    if (applyExtras) {
+      applyExtras.commit();
+    }
     const variant = currentVariant();
     if (!variant) {
       return;
@@ -2758,7 +2808,7 @@ function createResizeWorkspace(root) {
   }
 
   function renderTemplatePicker() {
-    const names = moduleStore.templates.map((template) => template.name || "（未命名模組）");
+    const names = templates().map((template) => template.name || "（未命名模組）");
     const labels = state.draft ? [state.draft.label, ...names] : names;
     fillPicker(templatePicker, labels);
     if (labels.length) {
@@ -2770,9 +2820,13 @@ function createResizeWorkspace(root) {
   function renderVariantPicker() {
     const template = currentTemplate();
     const variants = template ? template.values.variants : [];
-    fillPicker(variantPicker, variants.map(variantLabel));
-    if (variants.length) {
-      setPickerIndex(variantPicker, state.variantIndex);
+    const labels = variants.map(variantLabel);
+    if (isApply) {
+      labels.push(...state.sets.map((set) => set.name));
+    }
+    fillPicker(variantPicker, labels);
+    if (labels.length) {
+      setPickerIndex(variantPicker, isApply ? state.outputIndex : state.variantIndex);
     }
     updateVariantNameValidity();
   }
@@ -2798,6 +2852,9 @@ function createResizeWorkspace(root) {
     renderVariantPicker();
     renderElementPicker();
     loadFields();
+    if (applyExtras) {
+      applyExtras.load();
+    }
     renderPreview();
   }
 
@@ -2805,7 +2862,7 @@ function createResizeWorkspace(root) {
 
   function heightRatio(name) {
     // 高度% ÷ 寬度%：圖層長寬比 × 畫布寬高比
-    const info = state.previewCache && state.previewCache.images[name];
+    const info = layerImage(name);
     if (!info) {
       return 0;
     }
@@ -3037,7 +3094,7 @@ function createResizeWorkspace(root) {
     cache.order.forEach((name, index) => {
       const img = document.createElement("img");
       img.className = "preview-layer";
-      img.src = cache.images[name].dataUrl;
+      img.src = layerImage(name).dataUrl;
       img.style.zIndex = String(zIndexFor(name, index));
       stage.appendChild(img);
       state.images[name] = img;
@@ -3075,7 +3132,7 @@ function createResizeWorkspace(root) {
 
     setStatus("擷取圖層中，請稍候…");
     try {
-      const cache = await getPreviewCache(master, force);
+      const cache = await getPreviewCache(master, force, mode.required());
       // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
       if (!state.master || state.master.id !== master.id) {
         return; // 擷取期間已切換母版
@@ -3270,13 +3327,17 @@ function createResizeWorkspace(root) {
     commitFields();
     state.templateIndex = index;
     state.variantIndex = 0;
+    if (applyExtras) {
+      applyExtras.resetOutputs();
+      applyExtras.load();
+    }
     clampSelection();
 
     // 模組記錄的來源 PSD 若已開啟，就改用它當預覽母版
     // 模組的來源 PSD 若已開啟，預覽改用它（只換面板的預覽來源，不切換 Photoshop 文件）
     const template = currentTemplate();
     const sourceDoc = findOpenDocumentForTemplate(template);
-    if (sourceDoc && validMasterOrNull(sourceDoc)) {
+    if (sourceDoc && mode.validMaster(sourceDoc)) {
       state.master = sourceDoc;
     }
 
@@ -3303,10 +3364,13 @@ function createResizeWorkspace(root) {
 
     try {
       const doc = await openPsdAsMaster(file);
-      requireMcdSmartLayers(getMcdSourceContainer(doc));
+      const problem = mode.masterProblem(doc);
+      if (problem) {
+        throw new Error(problem);
+      }
       state.master = doc;
-      await captureReferenceIfNeeded(doc);
-      const existing = findTemplateIndexForDocument(doc);
+      await mode.onMaster(doc);
+      const existing = findTemplateIndexIn(templates(), doc);
       if (existing >= 0) {
         templateNameInput.value = "";
         templateNameInput.classList.remove("is-suggested");
@@ -3314,7 +3378,7 @@ function createResizeWorkspace(root) {
         state.templateIndex = existing;
         state.variantIndex = 0;
         renderAll();
-        setStatus(`${doc.name} 已有模組「${moduleStore.templates[existing].name}」。`);
+        setStatus(`${doc.name} 已有模組「${templates()[existing].name}」。`);
       } else {
         suggestTemplate(doc);
       }
@@ -3332,7 +3396,7 @@ function createResizeWorkspace(root) {
       setStatus("請輸入模組名稱。");
       return;
     }
-    if (moduleStore.templates.some((template) => template.name === name)) {
+    if (templates().some((template) => template.name === name)) {
       templateNameInput.classList.add("is-invalid");
       setStatus(`模組「${name}」已存在。`);
       return;
@@ -3345,18 +3409,21 @@ function createResizeWorkspace(root) {
     commitFields();
     // 有這份 PSD 的草稿就照畫面上的草稿存；否則用內建樣板、寬度依基準換算
     const draft = state.draft && state.draft.draftFor === state.master.id ? state.draft : null;
-    const values = draft ? draft.values : initialValuesForDocument(state.master);
+    const values = draft ? draft.values : mode.initialValues(state.master);
     const variantIndex = draft && isDraftSelected() ? state.variantIndex : 0;
     state.draft = null;
-    moduleStore.templates.push({
+    templates().push({
       name,
       source: {
         fileName: state.master.name,
         path: readDocumentPath(state.master),
       },
       values,
+      ...(isApply
+        ? { layers: draft ? draft.layers : [], srcPath: draft ? draft.srcPath : "" }
+        : {}),
     });
-    state.templateIndex = moduleStore.templates.length - 1;
+    state.templateIndex = templates().length - 1;
     state.variantIndex = variantIndex;
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
@@ -3408,6 +3475,17 @@ function createResizeWorkspace(root) {
   }
 
   function defaultElementsFor(template, variant) {
+    if (isApply) {
+      const doc = isDocumentOpen(state.master) ? state.master : null;
+      if (doc) {
+        try {
+          return mode.initialValues(doc).variants[0].elements;
+        } catch (_error) {
+          // 量不到就沿用目前的數值
+        }
+      }
+      return deepClone(variant.elements);
+    }
     // 與內建樣板同名就還原成內建數值（寬度依基準換算成這份 PSD 的比例），其餘還原成置中預設值
     const match = BUILTIN_RESIZE_VALUES.variants.find((item) =>
       isSameVariantName(item.outputDocument, variant.outputDocument || ""),
@@ -3475,7 +3553,7 @@ function createResizeWorkspace(root) {
     prefix: "template-manager",
     title: "編輯模組",
     emptyLabel: "（未命名模組）",
-    listItems: () => moduleStore.templates,
+    listItems: () => templates(),
     getName: (template) => template.name,
     setName: (template, name) => {
       template.name = name;
@@ -3484,12 +3562,12 @@ function createResizeWorkspace(root) {
     // 「預設」模組是新模組複製的來源，不開放刪除（可改名）
     canDelete: (template) => !template.builtin,
     remove: (template) => {
-      const index = moduleStore.templates.indexOf(template);
+      const index = templates().indexOf(template);
       if (index < 0) {
         return;
       }
-      moduleStore.templates.splice(index, 1);
-      if (state.templateIndex > index || state.templateIndex >= moduleStore.templates.length) {
+      templates().splice(index, 1);
+      if (state.templateIndex > index || state.templateIndex >= templates().length) {
         state.templateIndex = Math.max(state.templateIndex - 1, 0);
         state.variantIndex = 0;
       }
@@ -3516,8 +3594,15 @@ function createResizeWorkspace(root) {
     selectTemplate(readPickerIndex(event) - pickerOffset());
   });
 
-  variantPicker.addEventListener("change", (event) => {
+  variantPicker.addEventListener("change", async (event) => {
     commitFields();
+    if (isApply) {
+      // 套圖只有一個版面（預設）；其餘選項是各組換圖，共用同一個版面
+      state.variantIndex = 0;
+      await applyExtras.showOutput(readPickerIndex(event));
+      loadFields();
+      return;
+    }
     state.variantIndex = readPickerIndex(event);
     updateVariantNameValidity();
     loadFields();
@@ -3587,7 +3672,15 @@ function createResizeWorkspace(root) {
     if (!template) {
       return;
     }
+    if (isApply && isDraftSelected()) {
+      await app.showAlert("請點選新增模組");
+      return;
+    }
     if (!(await persist("設定已儲存"))) {
+      return;
+    }
+    if (isApply) {
+      await applyExtras.generate(template);
       return;
     }
     try {
@@ -3616,7 +3709,7 @@ function createResizeWorkspace(root) {
       return;
     }
     // 另一個分頁已替這份 PSD 新增模組：草稿換成該模組
-    const registered = state.draft ? findTemplateIndexForDocument(state.master) : -1;
+    const registered = state.draft ? findTemplateIndexIn(templates(), state.master) : -1;
     if (registered >= 0) {
       state.draft = null;
       state.templateIndex = registered;
@@ -3635,8 +3728,12 @@ function createResizeWorkspace(root) {
       name,
       label: `${stripExtension(doc.name)}（未新增）`,
       draftFor: doc.id,
-      values: initialValuesForDocument(doc),
+      values: mode.initialValues(doc),
+      ...(isApply ? { layers: [], srcPath: "" } : {}),
     };
+    if (applyExtras) {
+      applyExtras.resetOutputs();
+    }
     state.templateIndex = -1;
     state.variantIndex = 0;
     renderAll();
@@ -3649,8 +3746,8 @@ function createResizeWorkspace(root) {
   function masterNeedsTemplate() {
     return (
       isDocumentOpen(state.master) &&
-      Boolean(validMasterOrNull(state.master)) &&
-      findTemplateIndexForDocument(state.master) < 0
+      Boolean(mode.validMaster(state.master)) &&
+      findTemplateIndexIn(templates(), state.master) < 0
     );
   }
 
@@ -3663,7 +3760,7 @@ function createResizeWorkspace(root) {
       state.previewCache = null;
     }
     state.master = master;
-    const existing = master ? findTemplateIndexForDocument(master) : -1;
+    const existing = master ? findTemplateIndexIn(templates(), master) : -1;
     state.draft = null;
     state.templateIndex = Math.max(existing, 0);
     state.variantIndex = 0;
@@ -3681,13 +3778,277 @@ function createResizeWorkspace(root) {
   function show() {
     if (!isDocumentOpen(state.master)) {
       // 另一個分頁上傳過母版時，沿用目前作用中的文件
-      state.master = validMasterOrNull(app.activeDocument);
+      state.master = mode.validMaster(app.activeDocument);
     }
     if (!state.master) {
       return;
     }
     // 分頁隱藏時量不到寬度，切回來再重新擷取或排版
     refreshPreview(false);
+  }
+
+  // ----- 套圖專用：勾選換圖圖層、必選、圖檔 src、預覽套圖、產出套圖 -----
+
+  function setupApplyExtras() {
+    const layerToggle = el("layer-toggle");
+    const layerPanel = el("layer-panel");
+    const srcInput = el("src-path");
+    const requiredDialog = el("required-dialog");
+
+    // UXP 不支援 z-index：把下拉清單移到分頁最後，打開時依按鈕位置定位
+    root.appendChild(layerPanel);
+
+    function presentLayers() {
+      if (!isDocumentOpen(state.master)) {
+        return APPLY_LAYER_NAMES;
+      }
+      try {
+        const required = applyRequiredLayers();
+        return Object.keys(requireMcdSmartLayers(getMcdSourceContainer(state.master, required), required));
+      } catch (_error) {
+        return APPLY_LAYER_NAMES;
+      }
+    }
+
+    function checkedLayers() {
+      return APPLY_LAYER_NAMES.filter((name) => {
+        const box = layerPanel.querySelector(`[data-layer-name="${name}"]`);
+        return box && box.checked;
+      });
+    }
+
+    function updateToggleLabel() {
+      const layers = checkedLayers();
+      layerToggle.textContent = layers.length ? layers.join("、") : "（尚未勾選圖層）";
+    }
+
+    function load() {
+      const template = currentTemplate();
+      const layers = (template && template.layers) || [];
+      const present = presentLayers();
+      layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
+        const name = box.getAttribute("data-layer-name");
+        box.checked = layers.includes(name);
+        box.disabled = !present.includes(name);
+        box.parentElement.classList.toggle("is-missing", box.disabled);
+      });
+      srcInput.value = (template && template.srcPath) || "";
+      updateToggleLabel();
+    }
+
+    function commit() {
+      const template = currentTemplate();
+      if (!template) {
+        return;
+      }
+      template.layers = checkedLayers();
+      template.srcPath = srcInput.value.trim();
+    }
+
+    function resetOutputs() {
+      state.sets = [];
+      state.outputIndex = 0;
+    }
+
+    function currentSet() {
+      return state.outputIndex > 0 ? state.sets[state.outputIndex - 1] || null : null;
+    }
+
+    function imageKey(file) {
+      return file.nativePath || file.name;
+    }
+
+    function replacementFor(name) {
+      const set = currentSet();
+      const file = set && set.files[name];
+      const info = file && state.imageInfos[imageKey(file)];
+      return info && info.width > 0
+        ? { dataUrl: info.url, width: info.width, height: info.height }
+        : null;
+    }
+
+    async function preloadSet(set) {
+      if (!set) {
+        return;
+      }
+      for (const file of Object.values(set.files)) {
+        const key = imageKey(file);
+        if (!state.imageInfos[key]) {
+          try {
+            state.imageInfos[key] = await readImageInfo(file);
+          } catch (error) {
+            setStatus(`無法讀取 ${file.name}：${error.message || error}`);
+          }
+        }
+      }
+    }
+
+    async function showOutput(index) {
+      state.outputIndex = index;
+      await preloadSet(currentSet());
+      if (state.outputIndex === index) {
+        renderPreview();
+      }
+    }
+
+    async function buildSets() {
+      const template = currentTemplate();
+      const present = presentLayers();
+      const layers = template && template.layers
+        ? template.layers.filter((name) => present.includes(name))
+        : [];
+      if (!layers.length) {
+        await app.showAlert("請先在「套圖圖層」勾選要換圖的圖層（PSD 裡要有這個圖層）。");
+        return null;
+      }
+      if (!template.srcPath) {
+        await app.showAlert("請輸入圖檔 src 或按「選擇資料夾」。");
+        return null;
+      }
+      const folder = await resolveSrcFolder(template.srcPath);
+      if (!folder) {
+        await app.showAlert("找不到圖檔資料夾（或 Photoshop 不允許直接讀取這個路徑），請按「選擇資料夾」選一次。");
+        return null;
+      }
+      const { sets, perLayer } = await collectApplySets(folder, layers);
+      const summary = layers.map((name) => `${name} ${perLayer[name].length} 張`).join("、");
+      if (!sets.length) {
+        await app.showAlert(`資料夾裡找不到圖檔（${summary}）。子資料夾名稱需為圖層名去掉 $，例如 PROD、CTA。`);
+        return null;
+      }
+      return { sets, summary };
+    }
+
+    async function previewApply() {
+      commitFields();
+      const result = await buildSets();
+      if (!result) {
+        return;
+      }
+      state.sets = result.sets;
+      state.variantIndex = 0;
+      await showOutput(1);
+      renderVariantPicker();
+      loadFields();
+      setStatus(`找到 ${result.sets.length} 組（${result.summary}）`);
+    }
+
+    async function generate(template) {
+      if (!state.sets.length) {
+        const result = await buildSets();
+        if (!result) {
+          return;
+        }
+        state.sets = result.sets;
+        await showOutput(1);
+        renderVariantPicker();
+      }
+      if (!(await persist("設定已儲存"))) {
+        return;
+      }
+      try {
+        const done = await whilePhotoshopBusy(() =>
+          generateApplyDocuments(state.master, state.sets, template.values.variants[0]),
+        );
+        if (done) {
+          setStatus(`已產出 ${done} 個套圖檔案`);
+          await showToast(`已產出 ${done} 個套圖檔案`);
+        }
+      } catch (error) {
+        await app.showAlert(`套圖產製失敗：${error.message || error}`);
+      }
+      refreshPreview(false);
+    }
+
+    async function pickSrcFolder() {
+      let folder;
+      try {
+        folder = await localFileSystem.getFolder();
+      } catch (error) {
+        await app.showAlert(`無法選擇資料夾：${error.message || error}`);
+        return;
+      }
+      if (!folder) {
+        return;
+      }
+      try {
+        rememberSrcFolder(folder.nativePath, await localFileSystem.createPersistentToken(folder));
+      } catch (_error) {
+        // 無法記住授權，下次需要再選一次
+      }
+      srcInput.value = folder.nativePath;
+      commit();
+      resetOutputs();
+      renderVariantPicker();
+      renderPreview();
+    }
+
+    async function openRequiredDialog() {
+      const required = applyRequiredLayers();
+      requiredDialog.querySelectorAll("[data-required-name]").forEach((box) => {
+        box.checked = required.includes(box.getAttribute("data-required-name"));
+      });
+      if (!(await showDialog(requiredDialog, "必選圖層"))) {
+        return;
+      }
+      moduleStore.applyRequiredLayers = APPLY_LAYER_NAMES.filter((name) => {
+        const box = requiredDialog.querySelector(`[data-required-name="${name}"]`);
+        return box && box.checked;
+      });
+      await persist("已儲存必選圖層", "已儲存必選圖層");
+      const candidate = isDocumentOpen(state.master) ? state.master : app.activeDocument;
+      const doc = mode.validMaster(candidate);
+      if (doc) {
+        open(doc, "");
+        refreshPreview(true);
+      } else if (candidate) {
+        setStatus(mode.masterProblem(candidate));
+      }
+    }
+
+    layerToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (layerPanel.style.display === "block") {
+        layerPanel.style.display = "none";
+        return;
+      }
+      const rootRect = root.getBoundingClientRect();
+      const rect = layerToggle.getBoundingClientRect();
+      layerPanel.style.left = `${rect.left - rootRect.left}px`;
+      layerPanel.style.top = `${rect.bottom - rootRect.top + 2}px`;
+      layerPanel.style.width = `${rect.width}px`;
+      layerPanel.style.display = "block";
+    });
+    layerPanel.addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => {
+      layerPanel.style.display = "none";
+    });
+    layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
+      box.addEventListener("change", () => {
+        updateToggleLabel();
+        commit();
+        resetOutputs();
+        renderVariantPicker();
+        renderPreview();
+      });
+    });
+    srcInput.addEventListener("change", () => {
+      commit();
+      resetOutputs();
+      renderVariantPicker();
+      renderPreview();
+    });
+    el("btn-pick-src").addEventListener("click", pickSrcFolder);
+    el("btn-preview-apply").addEventListener("click", previewApply);
+    el("btn-required").addEventListener("click", openRequiredDialog);
+    el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
+    el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
+
+    return { load, commit, resetOutputs, replacementFor, showOutput, generate };
+  }
+
+  if (isApply) {
+    applyExtras = setupApplyExtras();
   }
 
   return workspace;
@@ -3748,11 +4109,54 @@ function normalizeApplyTemplate(raw) {
   const layers = Array.isArray(raw.layers)
     ? APPLY_LAYER_NAMES.filter((name) => raw.layers.includes(name))
     : [];
-  return {
+  const out = {
     name: String(raw.name || "").trim(),
     source: raw.source && typeof raw.source === "object" ? { ...raw.source } : null,
     layers,
     srcPath: String(raw.srcPath || "").trim(),
+  };
+  // 版面（與 Resize 相同格式）；舊的套圖模組沒有，開啟母版時依 PSD 原稿補上
+  if (raw.values && typeof raw.values === "object") {
+    const normalized = normalizeTemplate({ name: out.name, values: raw.values });
+    out.values = normalized.values;
+    if (!out.values.variants.length) {
+      out.values.variants.push({ outputDocument: "預設", elements: deepClone(DEFAULT_VARIANT_ELEMENTS) });
+    }
+  }
+  return out;
+}
+
+/**
+ * 套圖的預設版面：PSD 原稿各圖層的位置與大小（畫布百分比），畫布＝原稿尺寸。
+ * 只有一個版面「預設」，各組換圖都套用它。
+ */
+function applyInitialValues(doc) {
+  const measured = measureLayerFrames(doc, applyRequiredLayers());
+  const elements = {};
+  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    const frame = measured.frames[name];
+    // 框＝原圖層的位置與大小：換上的圖等比塞進這個框並置中
+    elements[name] = frame
+      ? {
+          leftPercent: roundTo(frame.left, 2),
+          topPercent: roundTo(frame.top, 2),
+          widthPercent: roundTo(frame.width, 2),
+          heightPercent: roundTo(frame.height, 2),
+          centered: true,
+        }
+      : deepClone(DEFAULT_VARIANT_ELEMENTS[name]);
+  }
+  if (measured.frames.$BG) {
+    elements.$BG = {
+      leftPercent: roundTo(measured.frames.$BG.left, 2),
+      topPercent: roundTo(measured.frames.$BG.top, 2),
+      widthPercent: roundTo(measured.frames.$BG.width, 2),
+    };
+  }
+  return {
+    width: Math.round(measured.width),
+    height: Math.round(measured.height),
+    variants: [{ outputDocument: "預設", elements }],
   };
 }
 
@@ -3980,7 +4384,7 @@ async function replaceLayerImage(layer, imageFile) {
 }
 
 // 每一組：複製原始 PSD → 換圖 → 另存 → 關閉副本（不修改原稿）
-async function generateApplyDocuments(master, sets) {
+async function generateApplyDocuments(master, sets, variant) {
   if (!isDocumentOpen(master)) {
     throw new Error("母版已關閉，請重新開啟或上傳母版。");
   }
@@ -3998,13 +4402,28 @@ async function generateApplyDocuments(master, sets) {
         const copy = await master.duplicate(stripExtension(set.name));
         app.activeDocument = copy;
         try {
-          const container = getMcdSourceContainer(copy, applyRequiredLayers());
+          const required = applyRequiredLayers();
+          const container = getMcdSourceContainer(copy, required);
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
             if (!layer) {
               throw new Error(`找不到圖層 ${name}`);
             }
             await replaceLayerImage(layer, set.files[name]);
+          }
+          // 再依面板上的版面（靠左／靠上／寬度／高度）擺放每個圖層
+          if (variant) {
+            const frame =
+              container === copy
+                ? { left: 0, top: 0, right: unitNumber(copy.width), bottom: unitNumber(copy.height) }
+                : readLayerBounds(container);
+            const layers = requireMcdSmartLayers(container, required);
+            for (const name of Object.keys(layers)) {
+              const spec = variant.elements[name];
+              if (spec) {
+                await layoutInFrame(layers[name], frame, spec, name);
+              }
+            }
           }
           await saveDocumentAsPsd(copy, file);
         } finally {
@@ -4027,749 +4446,40 @@ async function generateApplyDocuments(master, sets) {
   return done;
 }
 
-function createApplyWorkspace(root) {
-  const el = (role) => root.querySelector(`[data-role="${role}"]`);
-  const stage = el("preview-stage");
-  const templatePicker = el("template-picker");
-  const templateNameInput = el("template-name");
-  const outputPicker = el("output-picker");
-  const layerToggle = el("layer-toggle");
-  const layerPanel = el("layer-panel");
-  const srcInput = el("src-path");
-  const requiredDialog = el("required-dialog");
-
-  // UXP 不支援 z-index，後出現的元素會蓋在前面：把下拉清單移到分頁最後，
-  // 打開時再依按鈕位置定位，才不會被下方的 src 輸入框等元素蓋住
-  root.appendChild(layerPanel);
-
-  const state = {
-    master: null,
-    templateIndex: 0,
-    draft: null,
-    previewCache: null,
-    frames: null,
-    sets: [],
-    outputIndex: 0,
-    imageUrls: {},
-    loading: false,
-    previewError: "",
-  };
-
-  const workspace = { root, open, show, commit: commitSettings };
-
-  // ----- 目前選取 -----
-
-  function templates() {
-    return moduleStore.applyTemplates;
-  }
-
-  function currentTemplate() {
-    return state.templateIndex < 0 ? state.draft : templates()[state.templateIndex] || null;
-  }
-
-  function isDraftSelected() {
-    return state.templateIndex < 0 && Boolean(state.draft);
-  }
-
-  function pickerOffset() {
-    return state.draft ? 1 : 0;
-  }
-
-  function clampSelection() {
-    if (state.templateIndex < 0 && state.draft) {
-      return;
-    }
-    const count = templates().length;
-    state.templateIndex = count ? Math.min(Math.max(state.templateIndex, 0), count - 1) : 0;
-  }
-
-  function setStatus(text) {
-    el("preview-status").textContent = text;
-  }
-
-  function masterNeedsTemplate() {
-    return (
-      isDocumentOpen(state.master) &&
-      Boolean(validApplyMasterOrNull(state.master)) &&
-      findTemplateIndexIn(templates(), state.master) < 0
-    );
-  }
-
-  // 目前母版有的圖層（預覽量測後才知道）
-  function presentLayers() {
-    return state.frames ? Object.keys(state.frames.frames) : APPLY_LAYER_NAMES;
-  }
-
-  function updateTemplateHint() {
-    el("template-hint").style.display = masterNeedsTemplate() ? "block" : "none";
-  }
-
-  // ----- 設定（勾選圖層、圖檔 src）-----
-
-  function checkedLayers() {
-    return APPLY_LAYER_NAMES.filter((name) => {
-      const box = layerPanel.querySelector(`[data-layer-name="${name}"]`);
-      return box && box.checked;
-    });
-  }
-
-  function updateLayerToggleLabel() {
-    const layers = checkedLayers();
-    layerToggle.textContent = layers.length ? layers.join("、") : "（尚未勾選圖層）";
-  }
-
-  function loadSettings() {
-    const template = currentTemplate();
-    const layers = template ? template.layers : [];
-    const present = presentLayers();
-    layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
-      const name = box.getAttribute("data-layer-name");
-      box.checked = layers.includes(name);
-      // PSD 沒有的圖層不能套圖
-      box.disabled = !present.includes(name);
-      box.parentElement.classList.toggle("is-missing", box.disabled);
-    });
-    srcInput.value = template ? template.srcPath : "";
-    updateLayerToggleLabel();
-  }
-
-  function commitSettings() {
-    const template = currentTemplate();
-    if (!template) {
-      return;
-    }
-    template.layers = checkedLayers();
-    template.srcPath = srcInput.value.trim();
-  }
-
-  function resetOutputs() {
-    state.sets = [];
-    state.outputIndex = 0;
-    renderOutputPicker();
-  }
-
-  // ----- 下拉選單 -----
-
-  function renderTemplatePicker() {
-    const names = templates().map((template) => template.name || "（未命名模組）");
-    const labels = state.draft ? [state.draft.label, ...names] : names;
-    fillPicker(templatePicker, labels);
-    if (labels.length) {
-      setPickerIndex(templatePicker, state.templateIndex + pickerOffset());
-    }
-    updateTemplateHint();
-  }
-
-  // 「預設」＝原稿；按「預覽套圖」後列出 套圖01.psd、套圖02.psd…
-  function renderOutputPicker() {
-    fillPicker(outputPicker, ["預設", ...state.sets.map((set) => set.name)]);
-    setPickerIndex(outputPicker, state.outputIndex);
-  }
-
-  function renderAll() {
-    clampSelection();
-    renderTemplatePicker();
-    renderOutputPicker();
-    loadSettings();
-    renderPreview();
-  }
-
-  // ----- 預覽：圖層照原稿位置擺放，勾選圖層換成目前這一組的圖 -----
-
-  function stageAspect() {
-    return state.frames ? state.frames.height / state.frames.width : 1;
-  }
-
-  function resizeStage() {
-    stage.style.height = `${stage.clientWidth * stageAspect()}px`;
-  }
-
-  function currentSet() {
-    return state.outputIndex > 0 ? state.sets[state.outputIndex - 1] || null : null;
-  }
-
-  /**
-   * 換上的圖等比塞進原圖層的框並置中（與產出時的處理相同），全部用畫布百分比計算：
-   *   框寬高(px) = 框% × 原稿畫布寬高
-   *   縮放 = min(框寬 ÷ 圖寬, 框高 ÷ 圖高)
-   * 讀不到圖的寬高時，直接用框的位置與寬度。
-   */
-  function containedRect(frame, info) {
-    const canvasW = state.frames.width;
-    const canvasH = state.frames.height;
-    const boxW = (frame.width / 100) * canvasW;
-    const boxH = (frame.height / 100) * canvasH;
-    if (!(info.width > 0 && info.height > 0 && boxW > 0 && boxH > 0)) {
-      return { left: frame.left, top: frame.top, width: frame.width };
-    }
-    const scale = Math.min(boxW / info.width, boxH / info.height);
-    const w = info.width * scale;
-    const h = info.height * scale;
-    return {
-      left: frame.left + (((boxW - w) / 2) / canvasW) * 100,
-      top: frame.top + (((boxH - h) / 2) / canvasH) * 100,
-      width: (w / canvasW) * 100,
-    };
-  }
-
-  function imageKey(file) {
-    return file.nativePath || file.name;
-  }
-
-  // 先把這一組要換的圖全部讀好，再一次畫出來（避免逐張閃爍）
-  async function preloadSet(set) {
-    if (!set) {
-      return;
-    }
-    for (const file of Object.values(set.files)) {
-      const key = imageKey(file);
-      if (state.imageUrls[key]) {
-        continue;
-      }
-      try {
-        state.imageUrls[key] = await readImageInfo(file);
-      } catch (error) {
-        setStatus(`無法讀取 ${file.name}：${error.message || error}`);
-      }
-    }
-  }
-
-  async function showOutput(index) {
-    state.outputIndex = index;
-    await preloadSet(currentSet());
-    if (state.outputIndex === index) {
-      renderPreview();
-    }
-  }
-
-  // 診斷：預覽圖放進去 1.5 秒後，記下面板實際排出來的位置、大小與載入狀態
-  let diagnosticsTimer = null;
-  function scheduleDiagnostics() {
-    clearTimeout(diagnosticsTimer);
-    diagnosticsTimer = setTimeout(() => {
-      const images = [...stage.querySelectorAll("img")];
-      const stageRect = stage.getBoundingClientRect();
-      const parts = images.map((img) => {
-        const rect = img.getBoundingClientRect();
-        const loaded = img.complete ? `載入${img.naturalWidth || "?"}×${img.naturalHeight || "?"}` : "未載入";
-        return `${img.dataset.layer} ${img.style.left}/${img.style.top}/${img.style.width} → ${Math.round(rect.left - stageRect.left)},${Math.round(rect.top - stageRect.top)} ${Math.round(rect.width)}×${Math.round(rect.height)} ${loaded}`;
-      });
-      el("preview-debug").textContent = `診斷：預覽區 ${Math.round(stageRect.width)}×${Math.round(stageRect.height)}；${parts.join("；") || "沒有圖"}`;
-    }, 1500);
-  }
-
-  function showStageMessage(text) {
-    const message = document.createElement("div");
-    message.className = "stage-message";
-    message.textContent = text;
-    stage.appendChild(message);
-  }
-
-  function renderPreview() {
-    stage.innerHTML = "";
-    // 只用目前母版的擷取結果，避免換 PSD 時閃出上一份的圖
-    const cache =
-      state.previewCache && state.master && state.previewCache.masterId === state.master.id
-        ? state.previewCache
-        : null;
-    if (!cache || !state.frames) {
-      if (state.frames) {
-        resizeStage();
-      }
-      if (state.loading) {
-        showStageMessage("預覽擷取中，請稍候…");
-      } else if (state.previewError) {
-        showStageMessage(state.previewError);
-      } else if (state.master) {
-        showStageMessage("尚未擷取預覽，請按「重新擷取圖層」。");
-      }
-      return 0;
-    }
-    const set = currentSet();
-    let shown = 0;
-    cache.order.forEach((name) => {
-      const frame = state.frames.frames[name];
-      if (!frame) {
-        return;
-      }
-      shown += 1;
-      const img = document.createElement("img");
-      img.dataset.layer = name;
-      img.addEventListener("error", () => {
-        setStatus(`${name} 的預覽圖無法顯示`);
-      });
-      img.className = "preview-layer";
-      img.style.left = `${frame.left}%`;
-      img.style.top = `${frame.top}%`;
-      img.style.width = `${frame.width}%`;
-      const replacement = set && set.files[name];
-      const info = replacement && state.imageUrls[imageKey(replacement)];
-      if (info) {
-        // 圖已預先讀好，寬高也已知：直接定位顯示
-        const rect = containedRect(frame, info);
-        img.classList.add("is-replaced");
-        img.style.left = `${rect.left}%`;
-        img.style.top = `${rect.top}%`;
-        img.style.width = `${rect.width}%`;
-        img.src = info.url;
-      } else {
-        img.src = cache.images[name].dataUrl;
-      }
-      stage.appendChild(img);
-    });
-    resizeStage();
-    scheduleDiagnostics();
-    if (!shown) {
-      // 診斷：擷取到的圖層和 PSD 量到的圖層對不上
-      showStageMessage(
-        `沒有可顯示的圖層（擷取：${cache.order.join("、") || "無"}；PSD：${Object.keys(state.frames.frames).join("、") || "無"}）`,
-      );
-    }
-    return shown;
-  }
-
-  async function refreshPreview(force) {
-    const master = state.master;
-    if (!isDocumentOpen(master)) {
-      state.previewCache = null;
-      renderPreview();
-      setStatus("請按「上傳.psd」或開啟母版後再按「開始執行」。");
-      return;
-    }
-    try {
-      state.frames = measureLayerFrames(master, applyRequiredLayers());
-    } catch (error) {
-      state.frames = null;
-      state.previewError = `${error.message || error}（可按「必選」調整必須有的圖層）`;
-      renderPreview();
-      setStatus(state.previewError);
-      return;
-    }
-    loadSettings();
-    if (!force && state.previewCache && state.previewCache.masterId === master.id) {
-      renderPreview();
-      return;
-    }
-    setStatus("擷取圖層中，請稍候…");
-    state.loading = true;
-    renderPreview();
-    try {
-      const cache = await getPreviewCache(master, force, applyRequiredLayers());
-      // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
-      if (!state.master || state.master.id !== master.id) {
-        return;
-      }
-      state.previewCache = cache;
-      state.loading = false;
-      state.previewError = "";
-      const shown = renderPreview();
-      if (cache.failed && cache.failed.length) {
-        setStatus(`部分圖層無法預覽（${cache.failed.join("；")}）`);
-      } else if (!state.sets.length) {
-        setStatus(`預覽來源：${master.name}（顯示 ${shown} 個圖層）`);
-      }
-    } catch (error) {
-      state.previewCache = null;
-      state.loading = false;
-      state.previewError = `預覽擷取失敗：${describeModalError(error)}`;
-      renderPreview();
-      setStatus(state.previewError);
-    }
-  }
-
-  // ----- 儲存 -----
-
-  async function persist(message, toast) {
-    try {
-      await saveModuleStore();
-      notifyModuleStoreChanged(workspace);
-      setStatus(message);
-      if (toast) {
-        await showToast(toast);
-      }
-      return true;
-    } catch (error) {
-      await app.showAlert(`module.json 寫入失敗：${error.message || error}`);
-      return false;
-    }
-  }
-
-  // ----- 模組 -----
-
-  function suggestTemplate(doc) {
-    const name = suggestTemplateName(doc);
-    state.draft = {
-      name,
-      label: `${stripExtension(doc.name)}（未新增）`,
-      draftFor: doc.id,
-      layers: [],
-      srcPath: "",
-    };
-    state.templateIndex = -1;
-    resetOutputs();
-    renderAll();
-    templateNameInput.value = name;
-    templateNameInput.classList.add("is-suggested");
-    setStatus(`${doc.name} 尚未建立套圖模組，確認名稱後按「新增」。`);
-  }
-
-  function selectTemplate(index) {
-    commitSettings();
-    state.templateIndex = index;
-    clampSelection();
-    const sourceDoc = findOpenDocumentForTemplate(currentTemplate());
-    if (sourceDoc && validApplyMasterOrNull(sourceDoc)) {
-      state.master = sourceDoc;
-    }
-    resetOutputs();
-    loadSettings();
-    refreshPreview(false);
-  }
-
-  async function uploadPsd() {
-    if (masterNeedsTemplate()) {
-      await app.showAlert("請點選新增模組");
-      return;
-    }
-    let file;
-    try {
-      file = await localFileSystem.getFileForOpening({ types: ["psd", "psb"] });
-    } catch (error) {
-      await app.showAlert(`無法選擇檔案：${error.message || error}`);
-      return;
-    }
-    if (!file) {
-      return;
-    }
-    try {
-      const doc = await openPsdAsMaster(file);
-      const problem = applyMasterProblem(doc);
-      if (problem) {
-        throw new Error(problem);
-      }
-      state.master = doc;
-      const existing = findTemplateIndexIn(templates(), doc);
-      if (existing >= 0) {
-        state.draft = null;
-        state.templateIndex = existing;
-        templateNameInput.value = "";
-        templateNameInput.classList.remove("is-suggested");
-        resetOutputs();
-        renderAll();
-        setStatus(`${doc.name} 已有套圖模組「${templates()[existing].name}」。`);
-      } else {
-        suggestTemplate(doc);
-      }
-      await refreshPreview(false);
-    } catch (error) {
-      await app.showAlert(error.message || String(error));
-    }
-  }
-
-  async function addTemplate() {
-    const name = templateNameInput.value.trim();
-    if (!name) {
-      templateNameInput.classList.add("is-invalid");
-      setStatus("請輸入模組名稱。");
-      return;
-    }
-    if (templates().some((template) => template.name === name)) {
-      templateNameInput.classList.add("is-invalid");
-      setStatus(`模組「${name}」已存在。`);
-      return;
-    }
-    if (!isDocumentOpen(state.master)) {
-      setStatus("請先按「上傳.psd」選擇母版。");
-      return;
-    }
-    commitSettings();
-    const draft = state.draft && state.draft.draftFor === state.master.id ? state.draft : null;
-    templates().push({
-      name,
-      source: { fileName: state.master.name, path: readDocumentPath(state.master) },
-      layers: draft ? draft.layers : [],
-      srcPath: draft ? draft.srcPath : "",
-    });
-    state.draft = null;
-    state.templateIndex = templates().length - 1;
-    templateNameInput.value = "";
-    templateNameInput.classList.remove("is-invalid", "is-suggested");
-    renderAll();
-    await persist(`已新增套圖模組「${name}」`, "成功新增模組");
-  }
-
-  const templateManager = createListManager(
-    {
-      prefix: "template-manager",
-      title: "編輯套圖模組",
-      emptyLabel: "（未命名模組）",
-      listItems: () => templates(),
-      getName: (template) => template.name,
-      setName: (template, name) => {
-        template.name = name;
-      },
-      isSameName: (a, b) => a === b,
-      remove: (template) => {
-        const index = templates().indexOf(template);
-        if (index < 0) {
-          return;
-        }
-        templates().splice(index, 1);
-        if (state.templateIndex > index || state.templateIndex >= templates().length) {
-          state.templateIndex = Math.max(state.templateIndex - 1, 0);
-        }
-      },
-      afterChange: renderAll,
-      deletedMessage: (template) => `已刪除套圖模組「${template.name}」`,
-    },
-    { el, beforeOpen: commitSettings, persist },
-  );
-
-  // ----- 圖檔資料夾與預覽套圖 -----
-
-  async function pickSrcFolder() {
-    let folder;
-    try {
-      folder = await localFileSystem.getFolder();
-    } catch (error) {
-      await app.showAlert(`無法選擇資料夾：${error.message || error}`);
-      return;
-    }
-    if (!folder) {
-      return;
-    }
-    const path = folder.nativePath;
-    try {
-      rememberSrcFolder(path, await localFileSystem.createPersistentToken(folder));
-    } catch (_error) {
-      // 無法記住授權，下次需要再選一次
-    }
-    srcInput.value = path;
-    commitSettings();
-    resetOutputs();
-    renderPreview();
-  }
-
-  async function buildSets() {
-    const template = currentTemplate();
-    const present = presentLayers();
-    const layers = template ? template.layers.filter((name) => present.includes(name)) : [];
-    if (!layers.length) {
-      await app.showAlert("請先在「圖層」勾選要套圖的圖層（PSD 裡要有這個圖層）。");
-      return null;
-    }
-    if (!template.srcPath) {
-      await app.showAlert("請輸入圖檔 src 或按「選擇資料夾」。");
-      return null;
-    }
-    const folder = await resolveSrcFolder(template.srcPath);
-    if (!folder) {
-      await app.showAlert("找不到圖檔資料夾（或 Photoshop 不允許直接讀取這個路徑），請按「選擇資料夾」選一次。");
-      return null;
-    }
-    const { sets, perLayer } = await collectApplySets(folder, layers);
-    const summary = layers
-      .map((name) => `${name} ${perLayer[name].length} 張`)
-      .join("、");
-    if (!sets.length) {
-      await app.showAlert(`資料夾裡找不到圖檔（${summary}）。子資料夾名稱需為圖層名去掉 $，例如 PROD、CTA。`);
-      return null;
-    }
-    return { sets, summary };
-  }
-
-  async function previewApply() {
-    commitSettings();
-    const result = await buildSets();
-    if (!result) {
-      return;
-    }
-    state.sets = result.sets;
-    state.outputIndex = 1;
-    renderOutputPicker();
-    await showOutput(1);
-    setStatus(
-      `找到 ${result.sets.length} 組（${result.summary}）${state.loading ? "，預覽擷取中…" : ""}`,
-    );
-  }
-
-  // ----- 必選：PSD 必須有哪些圖層（沒勾的可以不存在）-----
-
-  async function openRequiredDialog() {
-    const required = applyRequiredLayers();
-    requiredDialog.querySelectorAll("[data-required-name]").forEach((box) => {
-      box.checked = required.includes(box.getAttribute("data-required-name"));
-    });
-    if (!(await showDialog(requiredDialog, "必選圖層"))) {
-      return;
-    }
-    moduleStore.applyRequiredLayers = APPLY_LAYER_NAMES.filter((name) => {
-      const box = requiredDialog.querySelector(`[data-required-name="${name}"]`);
-      return box && box.checked;
-    });
-    await persist("已儲存必選圖層", "已儲存必選圖層");
-    // 用新的必選條件重新檢查：目前的母版、或 Photoshop 作用中的文件
-    const candidate = isDocumentOpen(state.master) ? state.master : app.activeDocument;
-    const doc = validApplyMasterOrNull(candidate);
-    if (doc) {
-      open(doc, "");
-      refreshPreview(true);
-    } else if (candidate) {
-      setStatus(applyMasterProblem(candidate));
-    }
-  }
-
-  // ----- 事件 -----
-
-  templatePicker.addEventListener("change", (event) => {
-    selectTemplate(readPickerIndex(event) - pickerOffset());
-  });
-  el("btn-required").addEventListener("click", openRequiredDialog);
-  el("btn-required-save").addEventListener("click", () => requiredDialog.close("confirm"));
-  el("btn-required-cancel").addEventListener("click", () => requiredDialog.close("cancel"));
-  outputPicker.addEventListener("change", (event) => {
-    showOutput(readPickerIndex(event));
-  });
-  templateNameInput.addEventListener("input", () => {
-    templateNameInput.classList.remove("is-invalid", "is-suggested");
-  });
-
-  // 圖層下拉：點按鈕展開勾選清單，點外面收起
-  layerToggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    if (layerPanel.style.display === "block") {
-      layerPanel.style.display = "none";
-      return;
-    }
-    const rootRect = root.getBoundingClientRect();
-    const rect = layerToggle.getBoundingClientRect();
-    layerPanel.style.left = `${rect.left - rootRect.left}px`;
-    layerPanel.style.top = `${rect.bottom - rootRect.top + 2}px`;
-    layerPanel.style.width = `${rect.width}px`;
-    layerPanel.style.display = "block";
-  });
-  layerPanel.addEventListener("click", (event) => event.stopPropagation());
-  document.addEventListener("click", () => {
-    layerPanel.style.display = "none";
-  });
-  layerPanel.querySelectorAll("[data-layer-name]").forEach((box) => {
-    box.addEventListener("change", () => {
-      updateLayerToggleLabel();
-      commitSettings();
-      resetOutputs();
-      renderPreview();
-    });
-  });
-  srcInput.addEventListener("change", () => {
-    commitSettings();
-    resetOutputs();
-    renderPreview();
-  });
-
-  el("btn-upload-psd").addEventListener("click", uploadPsd);
-  el("btn-add-template").addEventListener("click", addTemplate);
-  el("btn-manage-templates").addEventListener("click", () => templateManager.open());
-  el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
-  el("btn-pick-src").addEventListener("click", pickSrcFolder);
-  el("btn-preview-apply").addEventListener("click", previewApply);
-
-  el("btn-save-setting").addEventListener("click", async () => {
-    commitSettings();
-    if (isDraftSelected()) {
-      await app.showAlert("請點選新增模組");
-      return;
-    }
-    await persist("已儲存套圖設定", "成功儲存設定值");
-  });
-
-  el("btn-start-generate").addEventListener("click", async () => {
-    commitSettings();
-    if (isDraftSelected()) {
-      await app.showAlert("請點選新增模組");
-      return;
-    }
-    if (!state.sets.length) {
-      const result = await buildSets();
-      if (!result) {
-        return;
-      }
-      state.sets = result.sets;
-      state.outputIndex = 1;
-      renderOutputPicker();
-      await showOutput(1);
-    }
-    if (!(await persist("設定已儲存"))) {
-      return;
-    }
-    try {
-      const done = await whilePhotoshopBusy(() => generateApplyDocuments(state.master, state.sets));
-      if (done) {
-        setStatus(`已產出 ${done} 個套圖檔案`);
-        await showToast(`已產出 ${done} 個套圖檔案`);
-      }
-      // 產圖期間切換過文件，回來後重畫預覽
-      refreshPreview(false);
-    } catch (error) {
-      await app.showAlert(`套圖產製失敗：${error.message || error}`);
-    }
-  });
-
-  el("btn-cancel-settings").addEventListener("click", () => {
-    closeResizeSettingsPanel();
-  });
-
-  window.addEventListener("resize", () => {
-    if (root.style.display !== "none") {
-      renderPreview();
-    }
-  });
-
-  onModuleStoreChanged((source) => {
-    if (source === workspace) {
-      return;
-    }
-    renderAll();
-  });
-
-  // ----- 對外 -----
-
-  function open(master, note) {
-    if (!master || !state.master || master.id !== state.master.id) {
-      state.previewCache = null;
-      state.frames = null;
-    }
-    state.master = master;
-    state.draft = null;
-    const existing = master ? findTemplateIndexIn(templates(), master) : -1;
-    state.templateIndex = Math.max(existing, 0);
-    templateNameInput.value = "";
-    templateNameInput.classList.remove("is-invalid", "is-suggested");
-    resetOutputs();
-    renderAll();
-    setStatus(note || "");
-    if (master && existing < 0) {
-      suggestTemplate(master);
-    }
-  }
-
-  function show() {
-    if (!isDocumentOpen(state.master)) {
-      state.master = validApplyMasterOrNull(app.activeDocument);
-    }
-    if (!state.master) {
-      return;
-    }
-    refreshPreview(false);
-  }
-
-  return workspace;
-}
-
 // ---------- 分頁與面板 ----------
 
+const RESIZE_MODE = {
+  kind: "resize",
+  templates: () => moduleStore.templates,
+  required: () => MCD_SMART_LAYER_NAMES,
+  validMaster: validMasterOrNull,
+  masterProblem: (doc) => {
+    try {
+      requireMcdSmartLayers(getMcdSourceContainer(doc));
+      return "";
+    } catch (error) {
+      return error.message || String(error);
+    }
+  },
+  // 內建樣板，寬度依 MCD-SMART 比例基準換算
+  initialValues: initialValuesForDocument,
+  onMaster: captureReferenceIfNeeded,
+};
+
+const APPLY_MODE = {
+  kind: "apply",
+  templates: () => moduleStore.applyTemplates,
+  required: applyRequiredLayers,
+  validMaster: validApplyMasterOrNull,
+  masterProblem: applyMasterProblem,
+  // 套圖的預設版面＝PSD 原稿的位置與大小
+  initialValues: applyInitialValues,
+  onMaster: async () => {},
+};
+
 const workspaces = {
-  resize: createResizeWorkspace(document.querySelector('[data-workspace="resize"]')),
-  apply: createApplyWorkspace(document.querySelector('[data-workspace="apply"]')),
+  resize: createResizeWorkspace(document.querySelector('[data-workspace="resize"]'), RESIZE_MODE),
+  apply: createResizeWorkspace(document.querySelector('[data-workspace="apply"]'), APPLY_MODE),
 };
 const START_TAB_KEY = "bannerResizer.startTab";
 
