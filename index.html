@@ -145,6 +145,46 @@
         cursor: grabbing;
       }
 
+      .preview-delete {
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        line-height: 17px;
+        text-align: center;
+        font-size: 14px;
+        color: white;
+        background: #d7373f;
+        border-radius: 9px;
+        cursor: pointer;
+      }
+
+      .style-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 13px;
+      }
+
+      .style-row sp-picker,
+      .style-row .style-input {
+        flex: 1 1 0;
+        min-width: 0;
+      }
+
+      .style-label {
+        flex: 0 0 36px;
+        color: #ccc;
+      }
+
+      .color-swatch {
+        flex: 0 0 22px;
+        height: 22px;
+        border: 1px solid #888;
+        border-radius: 3px;
+      }
+
       .text-editor {
         position: absolute;
         z-index: 1000;
@@ -679,13 +719,16 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
-                <button
-                  type="button"
-                  class="small-btn"
-                  data-role="btn-sync-sizes"
-                >
-                  同步圖層大小
-                </button>
+                <div class="title-buttons">
+                  <button type="button" class="small-btn" data-role="btn-text-style">編輯</button>
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-sync-sizes"
+                  >
+                    同步圖層大小
+                  </button>
+                </div>
               </div>
               <sp-picker data-role="element-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
@@ -704,6 +747,53 @@
               重新擷取圖層
             </button>
           </div>
+
+          <dialog data-role="text-style-dialog">
+            <div class="dialog-body manager-body">
+              <div class="style-row">
+                <span class="style-label">字型</span>
+                <sp-picker data-role="text-font-family" size="m">
+                  <sp-menu slot="options"></sp-menu>
+                </sp-picker>
+              </div>
+              <div class="style-row">
+                <span class="style-label">樣式</span>
+                <sp-picker data-role="text-font-style" size="m">
+                  <sp-menu slot="options"></sp-menu>
+                </sp-picker>
+              </div>
+              <div class="style-row">
+                <span class="style-label">大小</span>
+                <input type="text" class="text-input style-input" data-role="text-font-size" />
+                <span class="style-unit">pt</span>
+              </div>
+              <div class="style-row">
+                <span class="style-label">對齊</span>
+                <button type="button" class="small-btn" data-text-align="left">靠左</button>
+                <button type="button" class="small-btn" data-text-align="center">置中</button>
+                <button type="button" class="small-btn" data-text-align="right">靠右</button>
+              </div>
+              <div class="style-row">
+                <span class="style-label">顏色</span>
+                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000" />
+                <div class="color-swatch" data-role="text-color-swatch"></div>
+              </div>
+              <div class="manager-actions">
+                <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
+                <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="delete-text-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text" data-role="delete-text-message">請問要刪除文字區塊嗎？</p>
+              <div class="manager-actions">
+                <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
+                <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
 
           <dialog data-role="sync-dialog">
             <div class="dialog-body">
@@ -1032,6 +1122,7 @@
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
                 <div class="title-buttons">
+                  <button type="button" class="small-btn" data-role="btn-text-style">編輯文字</button>
                   <button
                     type="button"
                     class="small-btn"
@@ -1131,6 +1222,53 @@
               重新擷取圖層
             </button>
           </div>
+
+          <dialog data-role="text-style-dialog">
+            <div class="dialog-body manager-body">
+              <div class="style-row">
+                <span class="style-label">字型</span>
+                <sp-picker data-role="text-font-family" size="m">
+                  <sp-menu slot="options"></sp-menu>
+                </sp-picker>
+              </div>
+              <div class="style-row">
+                <span class="style-label">樣式</span>
+                <sp-picker data-role="text-font-style" size="m">
+                  <sp-menu slot="options"></sp-menu>
+                </sp-picker>
+              </div>
+              <div class="style-row">
+                <span class="style-label">大小</span>
+                <input type="text" class="text-input style-input" data-role="text-font-size" />
+                <span class="style-unit">pt</span>
+              </div>
+              <div class="style-row">
+                <span class="style-label">對齊</span>
+                <button type="button" class="small-btn" data-text-align="left">靠左</button>
+                <button type="button" class="small-btn" data-text-align="center">置中</button>
+                <button type="button" class="small-btn" data-text-align="right">靠右</button>
+              </div>
+              <div class="style-row">
+                <span class="style-label">顏色</span>
+                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000" />
+                <div class="color-swatch" data-role="text-color-swatch"></div>
+              </div>
+              <div class="manager-actions">
+                <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
+                <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="delete-text-dialog">
+            <div class="dialog-body">
+              <p class="dialog-text" data-role="delete-text-message">請問要刪除文字區塊嗎？</p>
+              <div class="manager-actions">
+                <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
+                <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
 
           <dialog data-role="sync-dialog">
             <div class="dialog-body">

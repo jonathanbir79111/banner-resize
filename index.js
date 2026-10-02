@@ -2479,6 +2479,7 @@ const EMPTY_TEMPLATE_LABEL = "（請按「上傳.psd」）";
 const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
 const DOUBLE_CLICK_MS = 400;
 const TEXT_EDITOR_Z_INDEX = 1000;
+const DELETE_BUTTON_SIZE = 18;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -3081,6 +3082,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     sel.handles.forEach(({ node }) => {
       node.style.display = hidden ? "none" : "block";
     });
+    const deletable = !hidden && EXTRA_TEXT_PATTERN.test(state.elementName);
+    if (sel.remove) {
+      sel.remove.style.display = deletable ? "block" : "none";
+    }
     if (hidden) {
       return;
     }
@@ -3106,6 +3111,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       node.style.left = `${x - half}px`;
       node.style.top = `${y - half}px`;
     });
+    if (deletable && sel.remove) {
+      // 放在右上角控制點的右上方，不擋到縮放
+      const size = DELETE_BUTTON_SIZE;
+      const right = ((spec.leftPercent + spec.widthPercent) / 100) * stageW;
+      const top = (spec.topPercent / 100) * stageH;
+      sel.remove.style.left = `${clampNumber(right + 4, 0, stageW - size)}px`;
+      sel.remove.style.top = `${clampNumber(top - size - 4, 0, stageH - size)}px`;
+    }
   }
 
   function updateHighlight() {
@@ -3133,7 +3146,22 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       stage.appendChild(node);
       return { corner, node };
     });
-    return { box, handles };
+    // 「新增文字」的文字區塊右上角有 ×，可以刪除
+    const remove = document.createElement("div");
+    remove.className = "preview-delete";
+    remove.textContent = "×";
+    remove.style.zIndex = String(zIndex + 2);
+    remove.style.display = "none";
+    remove.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+    });
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteTextBlock();
+    });
+    stage.appendChild(remove);
+    return { box, handles, remove };
   }
 
   // ----- 圖層前後順序 -----
@@ -3718,6 +3746,173 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
   }
 
+  // ----- 文字樣式（圖層旁的「編輯」） -----
+
+  const textStyle = { fonts: null, families: [], pickedFamily: "", align: "left", missing: "" };
+
+  function fillFontStyles(family, preferred) {
+    const styles = (textStyle.fonts || [])
+      .filter((font) => font.family === family)
+      .map((font) => font.style);
+    fillPicker(el("text-font-style"), styles.length ? styles : ["—"]);
+    const index = Math.max(styles.indexOf(preferred), styles.indexOf("Regular"), 0);
+    setPickerIndex(el("text-font-style"), index);
+    return styles;
+  }
+
+  function renderAlignButtons() {
+    root.querySelectorAll("[data-text-align]").forEach((button) => {
+      const value = button.getAttribute("data-text-align");
+      const label = { left: "靠左", center: "置中", right: "靠右" }[value];
+      button.textContent = value === textStyle.align ? `✓ ${label}` : label;
+    });
+  }
+
+  function updateColorSwatch() {
+    const value = el("text-color").value.trim();
+    const hex = /^#?[0-9a-f]{6}$/i.test(value) ? `#${value.replace("#", "")}` : "transparent";
+    el("text-color-swatch").style.background = hex;
+  }
+
+  async function openTextStyle() {
+    const name = state.elementName;
+    if (!isDocumentOpen(state.master)) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
+    commitFields();
+    const master = state.master;
+    setStatus(`讀取 ${name} 的文字樣式中…`);
+    let style;
+    try {
+      style = await whilePhotoshopBusy(() =>
+        readTextStyle(master, name, mode.required(), layerNames()),
+      );
+    } catch (error) {
+      setStatus(`無法讀取文字樣式：${describeModalError(error)}`);
+      await app.showAlert(`無法讀取文字樣式：${describeModalError(error)}`);
+      return;
+    }
+    if (!style) {
+      setStatus(`${name} 沒有文字`);
+      await app.showAlert(`${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`);
+      return;
+    }
+
+    // 字型清單：目前字型找不到時（缺字型）放在第一項，代表維持不變
+    textStyle.fonts = textStyle.fonts || listFonts();
+    const families = [...new Set(textStyle.fonts.map((font) => font.family))].sort((a, b) =>
+      a.localeCompare(b),
+    );
+    const current = textStyle.fonts.find((font) => font.postScriptName === style.font) || null;
+    textStyle.missing = current ? "" : style.font;
+    textStyle.families = textStyle.missing ? [`（目前字型）${style.font || "未知"}`, ...families] : families;
+    fillPicker(el("text-font-family"), textStyle.families);
+    const familyIndex = current ? textStyle.families.indexOf(current.family) : 0;
+    setPickerIndex(el("text-font-family"), Math.max(familyIndex, 0));
+    textStyle.pickedFamily = current ? current.family : "";
+    fillFontStyles(textStyle.pickedFamily, current ? current.style : "");
+    el("text-font-size").value = style.size > 0 ? String(style.size) : "";
+    el("text-color").value = style.color;
+    textStyle.align = style.align;
+    renderAlignButtons();
+    updateColorSwatch();
+    setStatus(`編輯 ${name} 的文字樣式`);
+
+    if (!(await showDialog(el("text-style-dialog"), `文字樣式：${name}`))) {
+      setStatus("");
+      return;
+    }
+    const size = parseFloat(el("text-font-size").value);
+    const color = el("text-color").value.trim();
+    if (!(size > 0)) {
+      await app.showAlert("請輸入大於 0 的文字大小（pt）。");
+      return;
+    }
+    if (!/^#?[0-9a-f]{6}$/i.test(color)) {
+      await app.showAlert("顏色請輸入 6 位數色碼，例如 #000000。");
+      return;
+    }
+    const familyIndex2 = el("text-font-family").selectedIndex;
+    const styleName = (el("text-font-style").querySelectorAll("sp-menu-item")[el("text-font-style").selectedIndex] || {}).textContent;
+    const family = textStyle.families[familyIndex2];
+    const picked = textStyle.fonts.find((font) => font.family === family && font.style === styleName);
+    const next = {
+      font: picked ? picked.postScriptName : "",
+      size,
+      color: `#${color.replace("#", "").toUpperCase()}`,
+      align: textStyle.align,
+    };
+    setStatus(`更新 ${name} 的文字樣式並存檔中…`);
+    try {
+      await whilePhotoshopBusy(() =>
+        writeTextStyle(master, name, mode.required(), layerNames(), next),
+      );
+    } catch (error) {
+      setStatus(`更新文字樣式失敗：${describeModalError(error)}`);
+      await app.showAlert(`更新文字樣式失敗：${describeModalError(error)}`);
+      return;
+    }
+    if (state.master && state.master.id === master.id) {
+      await refreshPreview(true);
+    }
+    setStatus(`已更新 ${name} 的文字樣式並存檔`);
+    await showToast("已更新文字樣式");
+  }
+
+  // ----- 刪除文字區塊（$TEXTn 右上角的 ×） -----
+
+  async function deleteTextBlock() {
+    const name = state.elementName;
+    if (!EXTRA_TEXT_PATTERN.test(name) || !isDocumentOpen(state.master)) {
+      return;
+    }
+    el("delete-text-message").textContent = `請問要刪除文字區塊「${name}」嗎？`;
+    if (!(await showDialog(el("delete-text-dialog"), "刪除文字區塊"))) {
+      return;
+    }
+    commitFields();
+    const master = state.master;
+    try {
+      await whilePhotoshopBusy(() =>
+        deleteLayerFromMaster(master, name, mode.required(), layerNames()),
+      );
+    } catch (error) {
+      setStatus(`刪除失敗：${describeModalError(error)}`);
+      await app.showAlert(`刪除失敗：${describeModalError(error)}`);
+      return;
+    }
+    // 同一份 PSD 的模組一併拿掉這個圖層的位置
+    const path = readDocumentPath(master);
+    const owners = templates().filter(
+      (template) => template === currentTemplate() || (template.source && path && template.source.path === path),
+    );
+    if (state.draft) {
+      owners.push(state.draft);
+    }
+    owners.forEach((template) => {
+      (template.values ? template.values.variants : []).forEach((variant) => {
+        delete variant.elements[name];
+        if (Array.isArray(variant.order)) {
+          variant.order = variant.order.filter((item) => item !== name);
+        }
+      });
+    });
+    refreshExtraNames();
+    state.elementName = editableNames()[0];
+    renderAll();
+    if (state.master && state.master.id === master.id) {
+      await refreshPreview(true);
+    }
+    const message = `已刪除文字區塊 ${name}`;
+    if (currentTemplate() && !isDraftSelected()) {
+      await persist(message, "已刪除文字區塊");
+    } else {
+      setStatus(message);
+      await showToast("已刪除文字區塊");
+    }
+  }
+
   // ----- 新增文字 -----
 
   async function addText() {
@@ -4133,6 +4328,23 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-add-text").addEventListener("click", addText);
+  el("btn-text-style").addEventListener("click", openTextStyle);
+  el("text-font-family").addEventListener("change", (event) => {
+    const family = textStyle.families[readPickerIndex(event)];
+    textStyle.pickedFamily = family;
+    fillFontStyles(family, "");
+  });
+  root.querySelectorAll("[data-text-align]").forEach((button) => {
+    button.addEventListener("click", () => {
+      textStyle.align = button.getAttribute("data-text-align");
+      renderAlignButtons();
+    });
+  });
+  el("text-color").addEventListener("input", updateColorSwatch);
+  el("btn-text-style-save").addEventListener("click", () => el("text-style-dialog").close("confirm"));
+  el("btn-text-style-cancel").addEventListener("click", () => el("text-style-dialog").close("cancel"));
+  el("btn-delete-text-confirm").addEventListener("click", () => el("delete-text-dialog").close("confirm"));
+  el("btn-delete-text-cancel").addEventListener("click", () => el("delete-text-dialog").close("cancel"));
   el("btn-sync-sizes").addEventListener("click", syncLayerSizes);
   el("btn-sync-confirm").addEventListener("click", () => {
     el("sync-dialog").close("confirm");
@@ -5648,6 +5860,112 @@ async function addTextLayerToMaster(master, required, names, text) {
     await master.save();
   }, "新增文字");
   return newName;
+}
+
+// ---------- 文字樣式（字型／樣式／大小／對齊／顏色，像 Photoshop 上方的文字列） ----------
+
+const TEXT_ALIGNS = ["left", "center", "right"];
+
+function textStyleOf(layer) {
+  const item = layer.textItem;
+  if (!item || !item.characterStyle) {
+    throw new Error("這個版本的 Photoshop 讀不到文字樣式");
+  }
+  const cs = item.characterStyle;
+  let color = "#000000";
+  try {
+    color = `#${String(cs.color.rgb.hexValue).toUpperCase()}`;
+  } catch (_error) {
+    // 讀不到顏色就當黑色
+  }
+  let align = "left";
+  try {
+    const value = String(item.paragraphStyle.justification).toLowerCase();
+    align = value.includes("center") ? "center" : value.includes("right") ? "right" : "left";
+  } catch (_error) {
+    // 讀不到對齊就當靠左
+  }
+  return { font: String(cs.font || ""), size: roundTo(unitNumber(cs.size), 2), color, align };
+}
+
+function applyTextStyle(layer, style) {
+  const item = layer.textItem;
+  if (!item || !item.characterStyle) {
+    throw new Error("這個版本的 Photoshop 無法修改文字樣式");
+  }
+  const cs = item.characterStyle;
+  if (style.font) {
+    cs.font = style.font;
+  }
+  if (style.size > 0) {
+    cs.size = style.size;
+  }
+  if (style.color) {
+    const color = new app.SolidColor();
+    color.rgb.hexValue = style.color.replace("#", "");
+    cs.color = color;
+  }
+  if (style.align && constants.Justification) {
+    item.paragraphStyle.justification = constants.Justification[style.align.toUpperCase()];
+  }
+}
+
+// 讀第一個文字圖層的樣式；圖層沒有文字回傳 null
+async function readTextStyle(master, layerName, required, names) {
+  let style = null;
+  await runModal(async () => {
+    style = await withLayerTexts(master, layerName, required, names, async (_doc, layers) =>
+      layers.length ? textStyleOf(layers[0]) : null, false);
+  }, "讀取文字樣式");
+  return style;
+}
+
+// 套用到圖層裡所有文字圖層並存檔
+async function writeTextStyle(master, layerName, required, names, style) {
+  await runModal(async () => {
+    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
+      if (!layers.length) {
+        throw new Error(`${layerName} 沒有文字`);
+      }
+      layers.forEach((layer) => applyTextStyle(layer, style));
+    }, true);
+  }, "更新文字樣式");
+}
+
+function listFonts() {
+  const out = [];
+  try {
+    const fonts = app.fonts || [];
+    for (let i = 0; i < fonts.length; i++) {
+      const font = fonts[i];
+      out.push({
+        family: String(font.family || font.name || ""),
+        style: String(font.style || "Regular"),
+        postScriptName: String(font.postScriptName || font.name || ""),
+      });
+    }
+  } catch (_error) {
+    // 讀不到字型清單：只能沿用目前字型
+  }
+  return out;
+}
+
+// 刪除「新增文字」加的文字區塊並存檔
+async function deleteLayerFromMaster(master, layerName, required, names) {
+  await runModal(async () => {
+    app.activeDocument = master;
+    const container = getMcdSourceContainer(master, required, names);
+    const layer = findNamedLayer(container, layerName);
+    if (!layer) {
+      throw new Error(`找不到圖層 ${layerName}`);
+    }
+    await selectOnlyLayer(layer);
+    await action.batchPlay(
+      [{ _obj: "delete", _target: [{ _ref: "layer", _id: layer.id }] }],
+      { synchronousExecution: true },
+    );
+    await master.save();
+  }, "刪除文字區塊");
 }
 
 // ---------- 分頁與面板 ----------
