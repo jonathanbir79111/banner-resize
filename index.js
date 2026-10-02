@@ -1450,10 +1450,25 @@ function normalizeTemplate(raw) {
         if (order) {
           out.order = order;
         }
+        // 「調整版面尺寸」設定的這個樣板自己的尺寸（沒有就用模組的寬高）
+        const width = parsePositiveInt(variant && variant.width);
+        const height = parsePositiveInt(variant && variant.height);
+        if (width && height) {
+          out.width = width;
+          out.height = height;
+        }
         return out;
       }),
     },
   };
+}
+
+// 樣板自己的版面尺寸，沒設定就用模組的寬高
+function variantCanvasSize(values, variant) {
+  if (variant && variant.width > 0 && variant.height > 0) {
+    return { width: variant.width, height: variant.height };
+  }
+  return { width: values.width, height: values.height };
 }
 
 function newDraftVariant() {
@@ -2145,11 +2160,10 @@ async function generateResizeDocuments(master, values) {
   }
 
   const errors = [];
-  const canvasW = values.width;
-  const canvasH = values.height;
 
   for (const job of jobs) {
     const docName = stripExtension(job.fileName);
+    const { width: canvasW, height: canvasH } = variantCanvasSize(values, job.variant);
     try {
       await runModal(
         async () => {
@@ -2480,6 +2494,7 @@ const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
 const DOUBLE_CLICK_MS = 400;
 const TEXT_EDITOR_Z_INDEX = 1000;
 const DELETE_BUTTON_SIZE = 18;
+const MAX_CANVAS_SIZE = 30000;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -2836,7 +2851,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function canvasSize() {
     const template = currentTemplate();
-    return template ? template.values : BUILTIN_RESIZE_VALUES;
+    if (!template) {
+      return BUILTIN_RESIZE_VALUES;
+    }
+    // 套圖的畫布＝PSD 原稿；Resize 可以每個樣板各自設定版面尺寸
+    return isApply ? template.values : variantCanvasSize(template.values, currentVariant());
   }
 
   function variantLabel(variant) {
@@ -3774,6 +3793,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   // ----- 文字樣式（圖層旁的「編輯」） -----
 
   const textStyle = { fonts: null, families: [], pickedFamily: "", align: "left", missing: "" };
+  let canvasSizeDraft = null;
 
   function fillFontStyles(family, preferred) {
     const styles = (textStyle.fonts || [])
@@ -3797,6 +3817,78 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const value = el("text-color").value.trim();
     const hex = /^#?[0-9a-f]{6}$/i.test(value) ? `#${value.replace("#", "")}` : "transparent";
     el("text-color-swatch").style.background = hex;
+  }
+
+  // 色塊點兩下開 Photoshop 檢色器
+  async function onSwatchClick() {
+    const now = Date.now();
+    const last = textStyle.swatchClick || 0;
+    textStyle.swatchClick = now;
+    if (now - last >= DOUBLE_CLICK_MS || textStyle.picking) {
+      return;
+    }
+    textStyle.swatchClick = 0;
+    textStyle.picking = true;
+    try {
+      const picked = await pickColorInPhotoshop(el("text-color").value.trim());
+      if (picked) {
+        el("text-color").value = picked;
+        updateColorSwatch();
+      }
+    } catch (error) {
+      await app.showAlert(`無法開啟檢色器：${describeModalError(error)}`);
+    } finally {
+      textStyle.picking = false;
+    }
+  }
+
+  // ----- 調整版面尺寸（目前選的 Resize 樣板的輸出寬高） -----
+
+  function showCanvasSizeView(confirm) {
+    el("canvas-size-edit-view").style.display = confirm ? "none" : "block";
+    el("canvas-size-confirm-view").style.display = confirm ? "block" : "none";
+  }
+
+  async function openCanvasSize() {
+    const variant = currentVariant();
+    if (!variant) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
+    commitFields();
+    const size = canvasSize();
+    el("canvas-width").value = String(size.width);
+    el("canvas-height").value = String(size.height);
+    el("canvas-size-error").textContent = "";
+    showCanvasSizeView(false);
+    canvasSizeDraft = null;
+    if (!(await showDialog(el("canvas-size-dialog"), `調整版面尺寸：${variantLabel(variant)}`))) {
+      return;
+    }
+    if (!canvasSizeDraft || currentVariant() !== variant) {
+      return;
+    }
+    variant.width = canvasSizeDraft.width;
+    variant.height = canvasSizeDraft.height;
+    renderPreview();
+    const message = `已將「${variantLabel(variant)}」版面尺寸改為 ${variant.width} × ${variant.height} 像素`;
+    if (isDraftSelected()) {
+      setStatus(`${message}（按「新增」後存進 module.json）`);
+      await showToast("已更改版面尺寸");
+    } else {
+      await persist(message, "已更改版面尺寸");
+    }
+  }
+
+  function readCanvasSizeFields() {
+    const width = Number(el("canvas-width").value.trim());
+    const height = Number(el("canvas-height").value.trim());
+    const valid = (n) => Number.isInteger(n) && n >= 1 && n <= MAX_CANVAS_SIZE;
+    if (!valid(width) || !valid(height)) {
+      el("canvas-size-error").textContent = `寬度與高度請輸入 1～${MAX_CANVAS_SIZE} 的整數（像素）`;
+      return null;
+    }
+    return { width, height };
   }
 
   async function openTextStyle(layerName) {
@@ -4365,6 +4457,28 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     });
   });
   el("text-color").addEventListener("input", updateColorSwatch);
+  el("text-color-swatch").addEventListener("click", onSwatchClick);
+  if (el("btn-canvas-size")) {
+    el("btn-canvas-size").addEventListener("click", openCanvasSize);
+    el("btn-canvas-size-cancel").addEventListener("click", () => el("canvas-size-dialog").close("cancel"));
+    el("btn-canvas-size-save").addEventListener("click", () => {
+      const size = readCanvasSizeFields();
+      if (!size) {
+        return;
+      }
+      canvasSizeDraft = size;
+      el("canvas-size-confirm-text").textContent =
+        `確認要更改此版面尺寸？（${size.width} × ${size.height} 像素）`;
+      showCanvasSizeView(true);
+    });
+    el("btn-canvas-size-confirm-cancel").addEventListener("click", () => {
+      canvasSizeDraft = null;
+      showCanvasSizeView(false);
+    });
+    el("btn-canvas-size-confirm-ok").addEventListener("click", () => {
+      el("canvas-size-dialog").close("confirm");
+    });
+  }
   el("btn-text-style-save").addEventListener("click", () => el("text-style-dialog").close("confirm"));
   el("btn-text-style-cancel").addEventListener("click", () => el("text-style-dialog").close("cancel"));
   el("btn-delete-text-confirm").addEventListener("click", () => el("delete-text-dialog").close("confirm"));
@@ -5954,6 +6068,50 @@ async function writeTextStyle(master, layerName, required, names, style) {
       layers.forEach((layer) => applyTextStyle(layer, style));
     }, true);
   }, "更新文字樣式");
+}
+
+function hexToRgb(hex) {
+  const value = String(hex || "").replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(value)) {
+    return null;
+  }
+  return {
+    red: parseInt(value.slice(0, 2), 16),
+    green: parseInt(value.slice(2, 4), 16),
+    blue: parseInt(value.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(red, green, blue) {
+  return `#${[red, green, blue]
+    .map((n) => Math.round(clampNumber(Number(n) || 0, 0, 255)).toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+}
+
+// 打開 Photoshop 內建的檢色器；按取消回傳 null
+async function pickColorInPhotoshop(hex) {
+  const rgb = hexToRgb(hex) || { red: 0, green: 0, blue: 0 };
+  let picked = null;
+  await runModal(async () => {
+    const result = await action.batchPlay(
+      [
+        {
+          _obj: "showColorPicker",
+          _target: [{ _ref: "application" }],
+          context: "文字顏色",
+          color: { _obj: "RGBColor", red: rgb.red, grain: rgb.green, blue: rgb.blue },
+        },
+      ],
+      {},
+    );
+    const first = result && result[0];
+    const color = first && (first.RGBFloatColor || first.color);
+    if (color && Number.isFinite(Number(color.red))) {
+      picked = rgbToHex(color.red, color.grain, color.blue);
+    }
+  }, "選擇顏色");
+  return picked;
 }
 
 function listFonts() {
