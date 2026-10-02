@@ -1418,9 +1418,10 @@ function coverBackgroundRect(rect) {
 
 // 圖層前後順序（由下往上，不含固定在最底的 $BG）；需剛好是五個元件各一次，否則視為未設定
 function normalizeLayerOrder(raw) {
-  if (!Array.isArray(raw) || raw.length !== MCD_POSITION_ELEMENT_NAMES.length) {
+  if (!Array.isArray(raw) || !raw.every((name) => typeof name === "string")) {
     return null;
   }
+  // 五個元件各一次，另外可以有「新增文字」加的 $TEXT1…
   const names = new Set(raw);
   const valid =
     names.size === raw.length &&
@@ -1813,8 +1814,14 @@ async function createMcdDocumentFromMaster(
   });
 
   // 後複製的圖層會疊在上面：有指定層級就照「$BG + 樣板順序」由下往上複製，否則沿用母版順序
+  // （層級裡沒有的圖層，例如之後才新增的文字，放在最上面）
+  const others = Object.keys(sourceLayers).filter(
+    (layerName) => layerName !== "$BG" && !(layerOrder || []).includes(layerName),
+  );
   const bottomToTop = layerOrder
-    ? ["$BG", ...layerOrder].map((layerName) => sourceLayers[layerName])
+    ? ["$BG", ...layerOrder, ...others]
+        .map((layerName) => sourceLayers[layerName])
+        .filter(Boolean)
     : listMcdLayersBottomToTop(getMcdSourceContainer(master), sourceLayers);
   for (const layer of bottomToTop) {
     await master.duplicateLayers([layer], newDoc);
@@ -1847,7 +1854,8 @@ async function layoutInFrame(layer, frame, spec, name) {
 }
 
 async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
-  const layers = requireMcdSmartLayers(doc);
+  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(doc)];
+  const layers = requireMcdSmartLayers(doc, MCD_SMART_LAYER_NAMES, names);
 
   if (variant.elements.$BG) {
     await layoutSmartByPercents(
@@ -1861,7 +1869,10 @@ async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
     await layoutObjectFitCover(layers.$BG, canvasW, canvasH);
   }
 
-  for (const name of MCD_POSITION_ELEMENT_NAMES) {
+  for (const name of names.filter((item) => item !== "$BG")) {
+    if (!variant.elements[name]) {
+      continue; // 還沒設定位置的新增文字維持原位
+    }
     await layoutSmartByPercents(
       layers[name],
       canvasW,
@@ -2116,8 +2127,10 @@ async function generateResizeDocuments(master, values) {
     throw new Error("此模組還沒有已命名的版型，請先輸入版型名稱並按「新增」。");
   }
 
+  // 六個元件 + 「新增文字」加的 $TEXT1…
+  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(master)];
   const sourceContainer = getMcdSourceContainer(master);
-  const sourceLayers = requireMcdSmartLayers(sourceContainer);
+  const sourceLayers = requireMcdSmartLayers(sourceContainer, MCD_SMART_LAYER_NAMES, names);
 
   const folder = await localFileSystem.getFolder();
   if (!folder) {
@@ -2678,6 +2691,28 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   const workspace = { root, open, show, commit: commitFields };
 
+  // ----- 圖層名稱：模式本身的圖層 + 母版裡「新增文字」加的 $TEXT1… -----
+
+  function refreshExtraNames() {
+    try {
+      state.extraNames = isDocumentOpen(state.master) ? extraTextNames(state.master) : [];
+    } catch (_error) {
+      state.extraNames = [];
+    }
+  }
+
+  function layerNames() {
+    return withExtraNames(mode.layerNames(), state.extraNames || []);
+  }
+
+  function positionNames() {
+    return withExtraNames(mode.positionNames(), state.extraNames || []);
+  }
+
+  function editableNames() {
+    return withExtraNames(mode.editableNames(), state.extraNames || []);
+  }
+
   // ----- 目前選取 -----
 
   // templateIndex = -1 代表「尚未新增」的草稿模組（還沒按「新增」的 PSD）
@@ -2751,28 +2786,45 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   // 套圖新增的圖層在舊的版面裡沒有設定值：有母版就用 PSD 原稿位置，否則用預設框
+  // Resize：只補「新增文字」的 $TEXTn（依母版上的位置）
   function ensureVariantElements(template) {
-    if (!isApply || !template || !template.values) {
+    if (!template || !template.values) {
       return;
     }
     let measured = null;
     for (const variant of template.values.variants) {
-      for (const name of mode.positionNames()) {
+      for (const name of positionNames()) {
         if (variant.elements[name]) {
           continue;
         }
         if (!measured) {
-          measured = {};
-          if (isDocumentOpen(state.master)) {
-            try {
-              measured = mode.initialValues(state.master).variants[0].elements;
-            } catch (_error) {
-              // 量不到就用預設框
-            }
-          }
+          measured = measuredSpecs();
         }
         variant.elements[name] = measured[name] ? deepClone(measured[name]) : defaultSpecFor(name);
       }
+    }
+  }
+
+  function measuredSpecs() {
+    if (!isDocumentOpen(state.master)) {
+      return {};
+    }
+    try {
+      if (isApply) {
+        return mode.initialValues(state.master).variants[0].elements;
+      }
+      const { frames } = measureLayerFrames(state.master, mode.required(), layerNames());
+      const out = {};
+      Object.keys(frames).forEach((name) => {
+        out[name] = {
+          leftPercent: roundTo(frames[name].left, 2),
+          topPercent: roundTo(frames[name].top, 2),
+          widthPercent: roundTo(frames[name].width, 2),
+        };
+      });
+      return out;
+    } catch (_error) {
+      return {}; // 量不到就用預設框
     }
   }
 
@@ -2798,7 +2850,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       state.templateIndex = count ? Math.min(state.templateIndex, count - 1) : -1;
     }
     const template = currentTemplate();
-    const editable = mode.editableNames();
+    const editable = editableNames();
     if (!editable.includes(state.elementName)) {
       state.elementName = editable[0];
     }
@@ -2957,8 +3009,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function renderElementPicker() {
-    fillPicker(elementPicker, mode.editableNames());
-    setPickerIndex(elementPicker, mode.editableNames().indexOf(state.elementName));
+    fillPicker(elementPicker, editableNames());
+    setPickerIndex(elementPicker, editableNames().indexOf(state.elementName));
   }
 
   function updateVariantNameValidity() {
@@ -2972,6 +3024,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function renderAll() {
+    refreshExtraNames();
     clampSelection();
     renderTemplatePicker();
     renderVariantPicker();
@@ -3087,7 +3140,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function effectiveLayerOrder() {
     const variant = currentVariant();
-    const names = mode.positionNames();
+    const names = positionNames();
     if (variant && variant.order) {
       // 套圖的圖層清單可能改過：去掉已刪除的、新增的放最上面
       const kept = variant.order.filter((name) => names.includes(name));
@@ -3180,8 +3233,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       if (variant === source) {
         continue;
       }
-      for (const name of MCD_POSITION_ELEMENT_NAMES) {
-        copyFrameSize(source.elements[name], variant.elements[name]);
+      for (const name of positionNames()) {
+        if (source.elements[name] && variant.elements[name]) {
+          copyFrameSize(source.elements[name], variant.elements[name]);
+        }
       }
       if (!source.elements.$BG) {
         delete variant.elements.$BG;
@@ -3213,7 +3268,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       if (variant === source) {
         continue;
       }
-      for (const name of mode.positionNames()) {
+      for (const name of positionNames()) {
         if (source.elements[name]) {
           variant.elements[name] = deepClone(source.elements[name]);
         }
@@ -3291,7 +3346,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     let texts;
     try {
       texts = await whilePhotoshopBusy(() =>
-        readEditableTexts(master, name, mode.required(), mode.layerNames()),
+        readEditableTexts(master, name, mode.required(), layerNames()),
       );
     } catch (error) {
       state.textEditor = null;
@@ -3336,19 +3391,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         label.textContent = item.name;
         box.appendChild(label);
       }
-      // Photoshop 的換行是 \r；多行文字用 textarea
+      // Photoshop 的換行是 \r；一律用 textarea，Enter 確認、Shift／Alt＋Enter 換行
       const value = item.text.replace(/\r\n?|\n/g, "\n");
-      const multiline = value.includes("\n");
-      const input = document.createElement(multiline ? "textarea" : "input");
-      if (!multiline) {
-        input.type = "text";
-      }
+      const input = document.createElement("textarea");
       input.className = "text-input text-editor-input";
       input.value = value;
+      input.rows = Math.max(value.split("\n").length, 1) + 1;
       input.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
           closeTextEditor();
-        } else if (event.key === "Enter" && !multiline) {
+        } else if (event.key === "Enter" && (event.shiftKey || event.altKey)) {
+          event.preventDefault();
+          insertLineBreak(input);
+        } else if (event.key === "Enter") {
           event.preventDefault();
           confirmTextEditor();
         }
@@ -3356,6 +3411,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       box.appendChild(input);
       return input;
     });
+
+    const hint = document.createElement("div");
+    hint.className = "text-editor-hint";
+    hint.textContent = "Enter 確認；Shift＋Enter 或 Alt＋Enter 換行";
+    box.appendChild(hint);
 
     const actions = document.createElement("div");
     actions.className = "text-editor-actions";
@@ -3384,6 +3444,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     } catch (_error) {
       // 無法聚焦就略過
     }
+  }
+
+  function insertLineBreak(input) {
+    const value = input.value;
+    const start = Number.isFinite(input.selectionStart) ? input.selectionStart : value.length;
+    const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : start;
+    input.value = `${value.slice(0, start)}\n${value.slice(end)}`;
+    try {
+      input.selectionStart = input.selectionEnd = start + 1;
+    } catch (_error) {
+      // 無法移動游標就停在最後
+    }
+    input.rows = input.value.split("\n").length + 1;
   }
 
   function positionTextEditor(box, name) {
@@ -3421,7 +3494,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     setStatus(`更新 ${editor.name} 的文字並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
-        writeEditableTexts(editor.master, editor.name, mode.required(), mode.layerNames(), values),
+        writeEditableTexts(editor.master, editor.name, mode.required(), layerNames(), values),
       );
     } catch (error) {
       state.textEditor = null;
@@ -3443,6 +3516,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   async function refreshPreview(force) {
+    refreshExtraNames();
     const master = state.master;
     if (!isDocumentOpen(master)) {
       state.previewCache = null;
@@ -3457,7 +3531,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     setStatus("擷取圖層中，請稍候…");
     try {
-      const cache = await getPreviewCache(master, force, mode.required(), mode.layerNames());
+      const cache = await getPreviewCache(master, force, mode.required(), layerNames());
       // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
       if (!state.master || state.master.id !== master.id) {
         return; // 擷取期間已切換母版
@@ -3480,7 +3554,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     commitFields();
     state.elementName = name;
-    setPickerIndex(elementPicker, mode.editableNames().indexOf(name));
+    setPickerIndex(elementPicker, editableNames().indexOf(name));
     loadFields();
     updateHighlight();
   }
@@ -3644,28 +3718,40 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
   }
 
-  // 把目前版型各圖層的框高鎖定成目前母版圖層的實際高度（之後換 PSD 也不會超出）
-  async function lockFrameHeights() {
-    const variant = currentVariant();
-    if (!variant || !state.previewCache) {
-      setStatus("請先擷取預覽圖層。");
+  // ----- 新增文字 -----
+
+  async function addText() {
+    if (!isDocumentOpen(state.master)) {
+      await app.showAlert(EMPTY_STATUS);
       return;
     }
     commitFields();
-    let count = 0;
-    for (const name of mode.positionNames()) {
-      const spec = variant.elements[name];
-      if (spec && !hasFrameHeight(spec)) {
-        spec.heightPercent = roundTo(naturalHeightPercent(name, spec), 2);
-        count += 1;
-      }
+    const master = state.master;
+    setStatus("新增文字中…");
+    let name;
+    try {
+      name = await whilePhotoshopBusy(() =>
+        addTextLayerToMaster(master, mode.required(), layerNames(), DEFAULT_NEW_TEXT),
+      );
+    } catch (error) {
+      setStatus(`新增文字失敗：${describeModalError(error)}`);
+      await app.showAlert(`新增文字失敗：${describeModalError(error)}`);
+      return;
     }
-    loadFields();
-    renderPreview();
-    await persist(
-      `已鎖定「${variantLabel(variant)}」${count} 個圖層的框高`,
-      "已鎖定框高",
-    );
+    if (!state.master || state.master.id !== master.id) {
+      return;
+    }
+    refreshExtraNames();
+    state.elementName = name;
+    renderAll();
+    await refreshPreview(true);
+    const message = `已新增 ${name}（雙擊預覽上的文字可修改）`;
+    if (currentTemplate() && !isDraftSelected()) {
+      await persist(message, "已新增文字");
+    } else {
+      setStatus(message);
+      await showToast("已新增文字");
+    }
   }
 
   // ----- 模組（template）-----
@@ -4031,7 +4117,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   elementPicker.addEventListener("change", (event) => {
     commitFields();
-    state.elementName = mode.editableNames()[readPickerIndex(event)];
+    state.elementName = editableNames()[readPickerIndex(event)];
     loadFields();
     updateHighlight();
   });
@@ -4046,7 +4132,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-add-variant").addEventListener("click", addVariant);
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
-  el("btn-lock-heights").addEventListener("click", lockFrameHeights);
+  el("btn-add-text").addEventListener("click", addText);
   el("btn-sync-sizes").addEventListener("click", syncLayerSizes);
   el("btn-sync-confirm").addEventListener("click", () => {
     el("sync-dialog").close("confirm");
@@ -4190,7 +4276,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     // 沒有母版（剛按「開始執行」）時什麼都不選，等「上傳.psd」
     state.templateIndex = master ? Math.max(existing, 0) : -1;
     state.variantIndex = 0;
-    state.elementName = mode.editableNames()[0];
+    state.elementName = editableNames()[0];
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
     variantNameInput.value = "";
@@ -5207,7 +5293,7 @@ async function generateApplyDocuments(master, sets, variantFor) {
         app.activeDocument = copy;
         try {
           const required = applyRequiredLayers();
-          const names = applyLayerNames();
+          const names = withExtraNames(applyLayerNames(), extraTextNames(copy));
           const container = getMcdSourceContainer(copy, required, names);
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
@@ -5415,6 +5501,153 @@ async function writeEditableTexts(master, layerName, required, names, values) {
       }
     }, true);
   }, "更新文字");
+}
+
+// ---------- 新增文字：在 PSD 加一個文字智慧型物件 $TEXT1、$TEXT2… ----------
+
+const EXTRA_TEXT_PATTERN = /^\$TEXT\d+$/;
+const DEFAULT_NEW_TEXT = "新增文字";
+
+// PSD 裡「新增文字」加過的圖層名稱（$TEXT1、$TEXT2…，依數字排序）
+function extraTextNames(doc) {
+  const found = new Set();
+  (function walk(node) {
+    for (const layer of listLayers(node)) {
+      if (EXTRA_TEXT_PATTERN.test(String(layer.name))) {
+        found.add(String(layer.name));
+      }
+      if (canSearchChildren(layer)) {
+        walk(layer);
+      }
+    }
+  })(doc);
+  return [...found].sort((a, b) => Number(a.slice(5)) - Number(b.slice(5)));
+}
+
+function withExtraNames(names, extras) {
+  return [...names, ...extras.filter((name) => !names.includes(name))];
+}
+
+function allLayerNamesIn(doc) {
+  const out = new Set();
+  (function walk(node) {
+    for (const layer of listLayers(node)) {
+      out.add(String(layer.name));
+      if (canSearchChildren(layer)) {
+        walk(layer);
+      }
+    }
+  })(doc);
+  return out;
+}
+
+/**
+ * 在母版加一段文字：建立文字圖層（預設「新增文字」）→ 轉成智慧型物件（跟 $SM 一樣是一個 .psb）
+ * → 命名為下一個 $TEXTn → 放在畫布上方置中 → 存檔。回傳新圖層名稱。
+ */
+async function addTextLayerToMaster(master, required, names, text) {
+  let newName = "";
+  await runModal(async () => {
+    app.activeDocument = master;
+    const container = getMcdSourceContainer(master, required, names);
+    const existing = allLayerNamesIn(master);
+    let n = 1;
+    while (existing.has(`$TEXT${n}`)) {
+      n += 1;
+    }
+    newName = `$TEXT${n}`;
+
+    const frame =
+      container === master
+        ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+        : readLayerBounds(container);
+    const frameW = Math.max(frame.right - frame.left, 1);
+    const frameH = Math.max(frame.bottom - frame.top, 1);
+    const resolution = unitNumber(master.resolution) || 72;
+    const sizePx = Math.max(Math.round(frameH * 0.08), 12);
+
+    // 先選容器裡最上面的 $ 圖層：新圖層會建在它上面（同一個工作區域裡）
+    const found = requireMcdSmartLayers(container, [], names);
+    const top = listMcdLayersBottomToTop(container, found).slice(-1)[0] || null;
+    if (top) {
+      await selectOnlyLayer(top);
+    }
+    let textLayer = null;
+    if (typeof master.createTextLayer === "function") {
+      textLayer = await master.createTextLayer({
+        contents: text,
+        fontSize: (sizePx * 72) / resolution,
+        position: { x: frame.left + frameW * 0.1, y: frame.top + frameH * 0.2 },
+      });
+    } else {
+      await action.batchPlay(
+        [
+          {
+            _obj: "make",
+            _target: [{ _ref: "textLayer" }],
+            using: {
+              _obj: "textLayer",
+              textKey: text,
+              textClickPoint: {
+                _obj: "paint",
+                horizontal: { _unit: "percentUnit", _value: ((frame.left + frameW * 0.1) / unitNumber(master.width)) * 100 },
+                vertical: { _unit: "percentUnit", _value: ((frame.top + frameH * 0.2) / unitNumber(master.height)) * 100 },
+              },
+              textStyleRange: [
+                {
+                  _obj: "textStyleRange",
+                  from: 0,
+                  to: text.length,
+                  textStyle: {
+                    _obj: "textStyle",
+                    size: { _unit: "pointsUnit", _value: (sizePx * 72) / resolution },
+                    color: { _obj: "RGBColor", red: 0, grain: 0, blue: 0 },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        { synchronousExecution: true },
+      );
+      textLayer = master.activeLayers && master.activeLayers[0];
+    }
+    if (!textLayer) {
+      throw new Error("無法建立文字圖層");
+    }
+    if (top && container !== master) {
+      try {
+        // 確保在同一個工作區域裡
+        textLayer.move(top, constants.ElementPlacement.PLACEBEFORE);
+      } catch (_error) {
+        // 已在正確位置
+      }
+    }
+
+    // 轉成智慧型物件
+    await selectOnlyLayer(textLayer);
+    await action.batchPlay([{ _obj: "newPlacedLayer" }], { synchronousExecution: true });
+    const placed = (master.activeLayers && master.activeLayers[0]) || textLayer;
+    await action.batchPlay(
+      [{ _obj: "set", _target: [{ _ref: "layer", _id: placed.id }], to: { _obj: "layer", name: newName } }],
+      { synchronousExecution: true },
+    );
+    try {
+      placed.name = newName;
+    } catch (_error) {
+      // 已由 batchPlay 改名
+    }
+
+    // 水平置中、放在上方
+    const b = boundsBox(placed);
+    await translateLayer(
+      placed,
+      frame.left + (frameW - b.width) / 2 - b.left,
+      frame.top + frameH * 0.15 - b.top,
+    );
+    await master.save();
+  }, "新增文字");
+  return newName;
 }
 
 // ---------- 分頁與面板 ----------
