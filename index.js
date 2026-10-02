@@ -2464,6 +2464,7 @@ const RESIZE_CORNERS = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const HANDLE_SIZE = 10;
 const EMPTY_TEMPLATE_LABEL = "（請按「上傳.psd」）";
 const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
+const DOUBLE_CLICK_MS = 400;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -3255,6 +3256,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     cache.order.forEach((name, index) => {
       const img = document.createElement("img");
       img.className = "preview-layer";
+      img.setAttribute("data-layer", name);
       img.src = layerImage(name).dataUrl;
       img.style.zIndex = String(zIndexFor(name, index));
       stage.appendChild(img);
@@ -3268,9 +3270,162 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     state.selection = createSelection(cache.order.length + 1);
     applyLayerOrder();
+    if (state.textEditor && state.textEditor.box) {
+      // 文字編輯框放最後，疊在最上面（UXP 只看 DOM 順序）
+      stage.appendChild(state.textEditor.box);
+    }
 
     resizeStage();
     updateHighlight();
+  }
+
+  // ----- 預覽上雙擊圖層改文字（改完直接存 PSD） -----
+
+  async function openTextEditor(name) {
+    if (state.textEditor || !isDocumentOpen(state.master)) {
+      return;
+    }
+    const master = state.master;
+    state.textEditor = { name, master };
+    setStatus(`讀取 ${name} 的文字中…`);
+    let texts;
+    try {
+      texts = await whilePhotoshopBusy(() =>
+        readEditableTexts(master, name, mode.required(), mode.layerNames()),
+      );
+    } catch (error) {
+      state.textEditor = null;
+      setStatus(`無法讀取 ${name} 的文字：${describeModalError(error)}`);
+      return;
+    }
+    if (!texts.length) {
+      state.textEditor = null;
+      setStatus(`${name} 沒有可編輯的文字`);
+      return;
+    }
+    if (state.textEditor && state.master && state.master.id === master.id) {
+      showTextEditor(name, texts);
+    } else {
+      state.textEditor = null;
+    }
+  }
+
+  function textEditorPosition(name) {
+    const ratio = heightRatio(name);
+    const rect = ratio
+      ? fitInFrame(name, specForPreview(name), ratio)
+      : { left: 10, top: 10, width: 40, height: 10 };
+    const below = rect.top + rect.height;
+    return {
+      left: clampNumber(rect.left, 0, 55),
+      top: below < 70 ? Math.max(below, 0) : clampNumber(rect.top - 30, 0, 70),
+    };
+  }
+
+  function showTextEditor(name, texts) {
+    const box = document.createElement("div");
+    box.className = "text-editor";
+    const position = textEditorPosition(name);
+    box.style.left = `${position.left}%`;
+    box.style.top = `${position.top}%`;
+    box.addEventListener("mousedown", (event) => event.stopPropagation());
+
+    const inputs = texts.map((item) => {
+      if (texts.length > 1) {
+        const label = document.createElement("div");
+        label.className = "text-editor-label";
+        label.textContent = item.name;
+        box.appendChild(label);
+      }
+      // Photoshop 的換行是 \r；多行文字用 textarea
+      const value = item.text.replace(/\r\n?|\n/g, "\n");
+      const multiline = value.includes("\n");
+      const input = document.createElement(multiline ? "textarea" : "input");
+      if (!multiline) {
+        input.type = "text";
+      }
+      input.className = "text-input text-editor-input";
+      input.value = value;
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeTextEditor();
+        } else if (event.key === "Enter" && !multiline) {
+          event.preventDefault();
+          confirmTextEditor();
+        }
+      });
+      box.appendChild(input);
+      return input;
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "text-editor-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "small-btn";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", closeTextEditor);
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "small-btn";
+    confirm.textContent = "確認";
+    confirm.addEventListener("click", confirmTextEditor);
+    actions.appendChild(cancel);
+    actions.appendChild(confirm);
+    box.appendChild(actions);
+
+    state.textEditor = { name, master: state.master, texts, inputs, box };
+    stage.appendChild(box);
+    setStatus(`修改 ${name} 的文字，按「確認」寫回 PSD 並存檔`);
+    try {
+      inputs[0].focus();
+    } catch (_error) {
+      // 無法聚焦就略過
+    }
+  }
+
+  function closeTextEditor() {
+    const editor = state.textEditor;
+    state.textEditor = null;
+    if (editor && editor.box && editor.box.parentNode) {
+      editor.box.parentNode.removeChild(editor.box);
+    }
+    setStatus("");
+  }
+
+  async function confirmTextEditor() {
+    const editor = state.textEditor;
+    if (!editor || !editor.inputs || editor.saving) {
+      return;
+    }
+    const values = editor.inputs.map((input) => input.value.replace(/\r\n?|\n/g, "\r"));
+    const changed = values.some((value, i) => value !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"));
+    if (!changed) {
+      closeTextEditor();
+      return;
+    }
+    editor.saving = true;
+    if (editor.box.parentNode) {
+      editor.box.parentNode.removeChild(editor.box);
+    }
+    editor.box = null;
+    setStatus(`更新 ${editor.name} 的文字並存檔中…`);
+    try {
+      await whilePhotoshopBusy(() =>
+        writeEditableTexts(editor.master, editor.name, mode.required(), mode.layerNames(), values),
+      );
+    } catch (error) {
+      state.textEditor = null;
+      setStatus(`更新文字失敗：${describeModalError(error)}`);
+      await app.showAlert(`更新文字失敗：${describeModalError(error)}`);
+      return;
+    }
+    state.textEditor = null;
+    if (state.master && state.master.id === editor.master.id) {
+      await refreshPreview(true);
+    }
+    setStatus(`已更新 ${editor.name} 的文字並存檔`);
+    await showToast("已更新文字並存檔");
   }
 
   function updatePreviewFromFields() {
@@ -3340,6 +3495,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function startMove(name, event) {
     selectElement(name);
     beginDrag("move", null, event);
+    state.drag.name = name;
   }
 
   function startResize(corner, event) {
@@ -3395,6 +3551,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const dxPercent = ((event.clientX - drag.startX) / drag.stageW) * 100;
     const dyPercent = ((event.clientY - drag.startY) / drag.stageH) * 100;
+    if (Math.abs(event.clientX - drag.startX) > 2 || Math.abs(event.clientY - drag.startY) > 2) {
+      drag.moved = true;
+    }
 
     if (state.elementName === "$BG") {
       // 背景拖拉／縮放時即時夾在滿版範圍內（可為負值，但不會露出白邊）
@@ -3417,12 +3576,30 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function onMouseUp() {
-    if (!state.drag) {
+    const drag = state.drag;
+    if (!drag) {
       return;
     }
     state.drag = null;
     stage.classList.remove("is-dragging");
     commitFields();
+    noteClick(drag);
+  }
+
+  // 雙擊圖層改文字：同一圖層、兩次都沒拖動、間隔夠短才算（UXP 不一定有 dblclick 事件）
+  function noteClick(drag) {
+    if (drag.mode !== "move" || drag.moved) {
+      state.lastClick = null;
+      return;
+    }
+    const now = Date.now();
+    const last = state.lastClick;
+    if (last && last.name === drag.name && now - last.time < DOUBLE_CLICK_MS) {
+      state.lastClick = null;
+      openTextEditor(drag.name);
+      return;
+    }
+    state.lastClick = { name: drag.name, time: now };
   }
 
   // 預覽區不吃滑鼠滾輪：避免誤滑讓圖片左右位移，滾輪改為捲動整個面板
@@ -5064,6 +5241,160 @@ async function generateApplyDocuments(master, sets, variantFor) {
     throw new Error(errors.join("\n"));
   }
   return done;
+}
+
+// ---------- 預覽上雙擊改文字 ----------
+//
+// 圖層本身是文字圖層就直接改；群組找裡面的文字圖層；
+// 智慧型物件（例如 $SM 內含 TEXT 123.psb）先「編輯內容」打開，改完存檔關閉，
+// 外層的智慧型物件就會跟著更新。改完把 PSD 存檔。
+
+function isTextLayer(layer) {
+  return Boolean(layer && layer.kind === constants.LayerKind.TEXT);
+}
+
+// 由上往下找出容器內所有文字圖層
+function collectTextLayers(container) {
+  const out = [];
+  (function walk(node) {
+    for (const layer of listLayers(node)) {
+      if (isTextLayer(layer)) {
+        out.push(layer);
+      } else if (canSearchChildren(layer)) {
+        walk(layer);
+      }
+    }
+  })(container);
+  return out;
+}
+
+async function readLayerText(doc, layer) {
+  try {
+    if (layer.textItem && typeof layer.textItem.contents === "string") {
+      return layer.textItem.contents;
+    }
+  } catch (_error) {
+    // 舊版 Photoshop 沒有 textItem，改用 batchPlay
+  }
+  const result = await action.batchPlay(
+    [
+      {
+        _obj: "get",
+        _target: [
+          { _property: "textKey" },
+          { _ref: "layer", _id: layer.id },
+          { _ref: "document", _id: doc.id },
+        ],
+      },
+    ],
+    { synchronousExecution: true },
+  );
+  const key = result && result[0] && result[0].textKey;
+  return key && typeof key.textKey === "string" ? key.textKey : "";
+}
+
+async function writeLayerText(layer, text) {
+  try {
+    if (layer.textItem) {
+      // 用 DOM 改內容會保留原本的字型與樣式
+      layer.textItem.contents = text;
+      return;
+    }
+  } catch (_error) {
+    // 改用 batchPlay
+  }
+  await action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "textLayer", _id: layer.id }],
+        to: { _obj: "textLayer", textKey: text },
+      },
+    ],
+    { synchronousExecution: true },
+  );
+}
+
+// 打開智慧型物件的內容（.psb），回傳打開的文件
+async function openSmartObjectContents(master, layer) {
+  await selectOnlyLayer(layer);
+  await action.batchPlay([{ _obj: "placedLayerEditContents" }], { synchronousExecution: true });
+  const inner = app.activeDocument;
+  if (!inner || inner.id === master.id) {
+    throw new Error(`${layer.name} 的內容無法開啟`);
+  }
+  return inner;
+}
+
+/**
+ * 對母版的某個 $ 圖層裡的文字做事：
+ *   task(doc, textLayers) 拿到文字所在的文件與文字圖層（由上往下）。
+ *   save = true 時，改完存檔（智慧型物件內容與 PSD 本身）。
+ */
+async function withLayerTexts(master, layerName, required, names, task, save) {
+  app.activeDocument = master;
+  const container = getMcdSourceContainer(master, required, names);
+  const layer = findNamedLayer(container, layerName);
+  if (!layer) {
+    throw new Error(`找不到圖層 ${layerName}`);
+  }
+  if (isTextLayer(layer) || (!isSmartObject(layer) && canSearchChildren(layer))) {
+    const texts = isTextLayer(layer) ? [layer] : collectTextLayers(layer);
+    const result = await task(master, texts);
+    if (save && texts.length) {
+      await master.save();
+    }
+    return result;
+  }
+  if (!isSmartObject(layer)) {
+    return task(master, []);
+  }
+  const inner = await openSmartObjectContents(master, layer);
+  let result;
+  try {
+    result = await task(inner, collectTextLayers(inner));
+    if (save) {
+      await inner.save();
+    }
+  } finally {
+    await closeDocumentQuietly(inner);
+    if (isDocumentOpen(master)) {
+      app.activeDocument = master;
+    }
+  }
+  if (save) {
+    await master.save();
+  }
+  return result;
+}
+
+// 讀出圖層裡的文字：[{ name, text }]，沒有文字回傳空陣列
+async function readEditableTexts(master, layerName, required, names) {
+  let texts = [];
+  await runModal(async () => {
+    texts = await withLayerTexts(master, layerName, required, names, async (doc, layers) => {
+      const out = [];
+      for (const layer of layers) {
+        out.push({ name: layer.name, text: await readLayerText(doc, layer) });
+      }
+      return out;
+    }, false);
+  }, "讀取文字");
+  return texts;
+}
+
+// 依讀取時的順序寫回文字並存檔
+async function writeEditableTexts(master, layerName, required, names, values) {
+  await runModal(async () => {
+    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
+      if (layers.length !== values.length) {
+        throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
+      }
+      for (let i = 0; i < layers.length; i++) {
+        await writeLayerText(layers[i], values[i]);
+      }
+    }, true);
+  }, "更新文字");
 }
 
 // ---------- 分頁與面板 ----------
