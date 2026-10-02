@@ -2465,6 +2465,7 @@ const HANDLE_SIZE = 10;
 const EMPTY_TEMPLATE_LABEL = "（請按「上傳.psd」）";
 const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
 const DOUBLE_CLICK_MS = 400;
+const TEXT_EDITOR_Z_INDEX = 1000;
 
 function roundPercent(value) {
   return Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
@@ -3325,6 +3326,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function showTextEditor(name, texts) {
     const box = document.createElement("div");
     box.className = "text-editor";
+    // 預覽圖片各有 z-index（層級），編輯框要比全部都高才不會被蓋住、點得到按鈕
+    box.style.zIndex = String(TEXT_EDITOR_Z_INDEX);
     const position = textEditorPosition(name);
     box.style.left = `${position.left}%`;
     box.style.top = `${position.top}%`;
