@@ -3457,6 +3457,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     confirm.className = "small-btn";
     confirm.textContent = "確認";
     confirm.addEventListener("click", confirmTextEditor);
+    // 左下角「編輯」：開文字樣式（字型／大小／對齊／顏色）
+    const style = document.createElement("button");
+    style.type = "button";
+    style.className = "small-btn text-editor-style";
+    style.textContent = "編輯";
+    style.addEventListener("click", openStyleFromEditor);
+    actions.appendChild(style);
     actions.appendChild(cancel);
     actions.appendChild(confirm);
     box.appendChild(actions);
@@ -3496,6 +3503,24 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     box.style.left = `${stageRect.left - rootRect.left + (stageW * position.left) / 100}px`;
     box.style.top = `${stageRect.top - rootRect.top + (stageH * position.top) / 100}px`;
     box.style.width = `${Math.max(stageW * 0.45, 180)}px`;
+  }
+
+  // 已經改了文字就先寫回存檔，再開文字樣式
+  async function openStyleFromEditor() {
+    const editor = state.textEditor;
+    if (!editor || !editor.inputs || editor.saving) {
+      return;
+    }
+    const changed = editor.inputs.some(
+      (input, i) =>
+        input.value.replace(/\r\n?|\n/g, "\r") !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
+    );
+    if (changed) {
+      await confirmTextEditor();
+    } else {
+      closeTextEditor();
+    }
+    await openTextStyle(editor.name);
   }
 
   function closeTextEditor() {
@@ -3774,8 +3799,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     el("text-color-swatch").style.background = hex;
   }
 
-  async function openTextStyle() {
-    const name = state.elementName;
+  async function openTextStyle(layerName) {
+    const name = layerName || state.elementName;
     if (!isDocumentOpen(state.master)) {
       await app.showAlert(EMPTY_STATUS);
       return;
@@ -4328,7 +4353,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-add-text").addEventListener("click", addText);
-  el("btn-text-style").addEventListener("click", openTextStyle);
   el("text-font-family").addEventListener("change", (event) => {
     const family = textStyle.families[readPickerIndex(event)];
     textStyle.pickedFamily = family;
