@@ -145,6 +145,41 @@
         cursor: grabbing;
       }
 
+      .text-editor {
+        position: absolute;
+        box-sizing: border-box;
+        width: 45%;
+        min-width: 180px;
+        padding: 6px;
+        background: #2e2e2e;
+        border: 1px solid #0d66d0;
+        border-radius: 4px;
+      }
+
+      .text-editor-label {
+        font-size: 11px;
+        color: #ccc;
+        margin-top: 4px;
+      }
+
+      .text-editor-input {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 4px;
+      }
+
+      textarea.text-editor-input {
+        min-height: 48px;
+      }
+
+      .text-editor-actions {
+        display: flex;
+        flex-direction: row;
+        justify-content: flex-end;
+        gap: 6px;
+        margin-top: 6px;
+      }
+
       .preview-selection {
         position: absolute;
         display: none;
