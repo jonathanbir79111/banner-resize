@@ -3272,8 +3272,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.selection = createSelection(cache.order.length + 1);
     applyLayerOrder();
     if (state.textEditor && state.textEditor.box) {
-      // 文字編輯框放最後，疊在最上面（UXP 只看 DOM 順序）
-      stage.appendChild(state.textEditor.box);
+      positionTextEditor(state.textEditor.box, state.textEditor.name);
     }
 
     resizeStage();
@@ -3328,9 +3327,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     box.className = "text-editor";
     // 預覽圖片各有 z-index（層級），編輯框要比全部都高才不會被蓋住、點得到按鈕
     box.style.zIndex = String(TEXT_EDITOR_Z_INDEX);
-    const position = textEditorPosition(name);
-    box.style.left = `${position.left}%`;
-    box.style.top = `${position.top}%`;
     box.addEventListener("mousedown", (event) => event.stopPropagation());
 
     const inputs = texts.map((item) => {
@@ -3378,13 +3374,27 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     box.appendChild(actions);
 
     state.textEditor = { name, master: state.master, texts, inputs, box };
-    stage.appendChild(box);
+    // 放在預覽區裡會被圖層圖片蓋住（UXP 的 z-index 不可靠）：
+    // 跟「套圖圖層」下拉一樣移到分頁最後，再依預覽區位置擺到圖層旁邊
+    root.appendChild(box);
+    positionTextEditor(box, name);
     setStatus(`修改 ${name} 的文字，按「確認」寫回 PSD 並存檔`);
     try {
       inputs[0].focus();
     } catch (_error) {
       // 無法聚焦就略過
     }
+  }
+
+  function positionTextEditor(box, name) {
+    const position = textEditorPosition(name);
+    const rootRect = root.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const stageW = stageRect.width || stage.clientWidth;
+    const stageH = stageRect.height || stage.clientHeight;
+    box.style.left = `${stageRect.left - rootRect.left + (stageW * position.left) / 100}px`;
+    box.style.top = `${stageRect.top - rootRect.top + (stageH * position.top) / 100}px`;
+    box.style.width = `${Math.max(stageW * 0.45, 180)}px`;
   }
 
   function closeTextEditor() {
@@ -3402,11 +3412,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const values = editor.inputs.map((input) => input.value.replace(/\r\n?|\n/g, "\r"));
-    const changed = values.some((value, i) => value !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"));
-    if (!changed) {
-      closeTextEditor();
-      return;
-    }
+    // 文字沒改也照樣寫回存檔：順便把之前被裁掉的智慧型物件畫布放大
     editor.saving = true;
     if (editor.box.parentNode) {
       editor.box.parentNode.removeChild(editor.box);
@@ -5318,6 +5324,15 @@ async function writeLayerText(layer, text) {
   );
 }
 
+// 影像 > 全部顯現：畫布放大到容得下所有圖層（作用中文件）
+async function revealAllCanvas() {
+  try {
+    await action.batchPlay([{ _obj: "revealAll" }], { synchronousExecution: true });
+  } catch (_error) {
+    // 已經都在畫布內時 Photoshop 可能不給執行，略過
+  }
+}
+
 // 打開智慧型物件的內容（.psb），回傳打開的文件
 async function openSmartObjectContents(master, layer) {
   await selectOnlyLayer(layer);
@@ -5357,6 +5372,8 @@ async function withLayerTexts(master, layerName, required, names, task, save) {
   try {
     result = await task(inner, collectTextLayers(inner));
     if (save) {
+      // 智慧型物件的畫布只有原本文字那麼大，字變長會被裁掉：先「全部顯現」把畫布放大到容得下
+      await revealAllCanvas();
       await inner.save();
     }
   } finally {
