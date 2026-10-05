@@ -3145,9 +3145,22 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     updateLayerButtons();
   }
 
+  // 預覽區依版面比例：橫式／正方形撐滿面板寬；直式（高 > 寬）高度最多等於面板寬，
+  // 寬度跟著等比縮小並置中，不會變成一整條超長的預覽
   function resizeStage() {
     const canvas = canvasSize();
-    stage.style.height = `${(stage.clientWidth * canvas.height) / canvas.width}px`;
+    const available =
+      (stage.parentElement && stage.parentElement.clientWidth) || stage.clientWidth;
+    let width = available;
+    let height = (available * canvas.height) / canvas.width;
+    if (height > available) {
+      height = available;
+      width = (available * canvas.width) / canvas.height;
+    }
+    stage.style.width = `${width}px`;
+    stage.style.height = `${height}px`;
+    stage.style.marginLeft = "auto";
+    stage.style.marginRight = "auto";
   }
 
   function createSelection(zIndex) {
