@@ -3758,24 +3758,42 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       setStatus(`${name} 沒有文字`);
       return;
     }
+    let psdTexts;
+    try {
+      psdTexts = (
+        await whilePhotoshopBusy(() => readEditableTexts(master, name, mode.required(), layerNames()))
+      ).map((item) => item.text);
+    } catch (error) {
+      setStatus(`無法讀取 ${name} 的文字：${describeModalError(error)}`);
+      return;
+    }
     const variant = verticalVariant();
     const own = textOverrideOf(variant, name, false);
     const current = (own && own.style && own.style.orientation) || style.orientation || "horizontal";
     const next = current === "vertical" ? "horizontal" : "vertical";
     const label = next === "vertical" ? "直排" : "橫排";
+    // 直排：半形數字／英文轉全形才會直立；橫排：換回半形
+    const convert = next === "vertical" ? toFullWidth : toHalfWidth;
     if (variant) {
-      // 獨立樣板：方向存在這個樣板，不改 PSD
+      // 獨立樣板：方向與文字存在這個樣板，不改 PSD
       const override = textOverrideOf(variant, name, true);
+      const base =
+        override.texts && override.texts.length === psdTexts.length ? override.texts : psdTexts;
+      override.texts = base.map(convert);
       override.style = { ...(override.style || {}), orientation: next };
       renderPreview();
       await saveOverride(`已將「${variantLabel(variant)}」的 ${name} 改為${label}`);
       return;
     }
-    const frozen = freezeIndependent(name, "style", style);
+    // 共用樣板要改 PSD：獨立樣板先記下原本的樣式與文字
+    const frozen =
+      freezeIndependent(name, "style", style) + freezeIndependent(name, "texts", psdTexts);
     setStatus(`將 ${name} 改為${label}並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
-        writeTextStyle(master, name, mode.required(), layerNames(), { orientation: next }),
+        writeTextsAndStyle(master, name, mode.required(), layerNames(), psdTexts.map(convert), {
+          orientation: next,
+        }),
       );
     } catch (error) {
       setStatus(`轉向失敗：${describeModalError(error)}`);
@@ -6472,6 +6490,19 @@ function textStyleOf(layer) {
   return { font: String(cs.font || ""), size: roundTo(unitNumber(cs.size), 2), color, align, orientation };
 }
 
+// 直排時半形字（數字、英文、$ + 等）會被 Photoshop 橫躺：轉成全形才會直立；轉回橫排時換回半形
+function toFullWidth(text) {
+  return String(text)
+    .replace(/[!-~]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0xfee0))
+    .replace(/ /g, "\u3000");
+}
+
+function toHalfWidth(text) {
+  return String(text)
+    .replace(/[\uff01-\uff5e]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ");
+}
+
 async function applyTextStyle(layer, style) {
   const item = layer.textItem;
   if (!item || !item.characterStyle) {
@@ -6491,6 +6522,16 @@ async function applyTextStyle(layer, style) {
   }
   if (style.align && constants.Justification) {
     item.paragraphStyle.justification = constants.Justification[style.align.toUpperCase()];
+  }
+  if (style.orientation === "vertical") {
+    // 段落文字（固定大小的文字框）轉直排會照舊框的大小折行，每行只剩幾個字：先轉成點文字，只在換行處分行
+    try {
+      if (item.isParagraphText && typeof item.convertToPointText === "function") {
+        await item.convertToPointText();
+      }
+    } catch (_error) {
+      // 不支援就維持原樣
+    }
   }
   if (style.orientation) {
     // 橫排／直排
@@ -6585,6 +6626,21 @@ async function pickColorInPhotoshop(hex) {
     }
   }, "選擇顏色");
   return picked;
+}
+
+// 文字與樣式一起改、只存一次（轉向用）
+async function writeTextsAndStyle(master, layerName, required, names, values, style) {
+  await runModal(async () => {
+    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
+      if (layers.length !== values.length) {
+        throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
+      }
+      for (let i = 0; i < layers.length; i++) {
+        await writeLayerText(layers[i], values[i]);
+        await applyTextStyle(layers[i], style);
+      }
+    }, true);
+  }, "轉向");
 }
 
 function listFonts() {
