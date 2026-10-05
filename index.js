@@ -2989,22 +2989,26 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 下拉選單 -----
 
-  // 有草稿時下拉第 0 項是「（未新增）」草稿；什麼都沒選時第 0 項是提示；其後才是各模組
-  function pickerOffset() {
-    return state.draft || isNothingSelected() ? 1 : 0;
-  }
-
+  // 有草稿時下拉第 0 項是「（未新增）」草稿；什麼都沒選時第 0 項是提示；其後才是各模組。
+  // 畫下拉時記住每一項對應的模組（templateIndex，草稿／提示為 -1），
+  // 選擇時直接查表，不必在選完之後重畫下拉，位置也不會差一格
   function renderTemplatePicker() {
-    const names = templates().map((template) => template.name || "（未命名模組）");
-    let labels = names;
+    const entries = templates().map((template, index) => ({
+      label: template.name || "（未命名模組）",
+      index,
+    }));
     if (state.draft) {
-      labels = [state.draft.label, ...names];
+      entries.unshift({ label: state.draft.label, index: -1 });
     } else if (isNothingSelected()) {
-      labels = [EMPTY_TEMPLATE_LABEL, ...names];
+      entries.unshift({ label: EMPTY_TEMPLATE_LABEL, index: -1 });
     }
-    fillPicker(templatePicker, labels);
-    if (labels.length) {
-      setPickerIndex(templatePicker, state.templateIndex + pickerOffset());
+    state.templateEntries = entries;
+    fillPicker(templatePicker, entries.map((entry) => entry.label));
+    if (entries.length) {
+      setPickerIndex(
+        templatePicker,
+        Math.max(entries.findIndex((entry) => entry.index === state.templateIndex), 0),
+      );
     }
     updateTemplateHint();
   }
@@ -4090,9 +4094,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       applyExtras.load();
     }
     clampSelection();
-    // 重畫模組下拉：一開始的「（請按「上傳.psd」）」提示項選了模組後就拿掉，
-    // 不重畫的話下拉還留著提示項，下一次選擇的位置會差一格（選到別的模組）
-    renderTemplatePicker();
+    // 不在下拉自己的 change 事件裡重畫它（UXP 會讓下拉卡住點不了）
     renderVariantPicker();
     loadFields();
     loadTemplateSource(currentTemplate());
@@ -4426,7 +4428,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   templatePicker.addEventListener("change", (event) => {
-    selectTemplate(readPickerIndex(event) - pickerOffset());
+    const entry = (state.templateEntries || [])[readPickerIndex(event)];
+    if (entry) {
+      selectTemplate(entry.index);
+    }
   });
 
   variantPicker.addEventListener("change", async (event) => {
