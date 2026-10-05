@@ -4090,6 +4090,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       applyExtras.load();
     }
     clampSelection();
+    // 重畫模組下拉：一開始的「（請按「上傳.psd」）」提示項選了模組後就拿掉，
+    // 不重畫的話下拉還留著提示項，下一次選擇的位置會差一格（選到別的模組）
+    renderTemplatePicker();
     renderVariantPicker();
     loadFields();
     loadTemplateSource(currentTemplate());
