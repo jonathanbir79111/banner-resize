@@ -1450,6 +1450,13 @@ function normalizeTemplate(raw) {
         if (order) {
           out.order = order;
         }
+        if (variant && variant.independent === true) {
+          out.independent = true;
+        }
+        const overrides = normalizeTextOverrides(variant && variant.textOverrides);
+        if (overrides) {
+          out.textOverrides = overrides;
+        }
         // 「調整版面尺寸」設定的這個樣板自己的尺寸（沒有就用模組的寬高）
         const width = parsePositiveInt(variant && variant.width);
         const height = parsePositiveInt(variant && variant.height);
@@ -1461,6 +1468,57 @@ function normalizeTemplate(raw) {
       }),
     },
   };
+}
+
+/**
+ * 獨立樣板自己的文字（不改 PSD、不影響其他樣板）：
+ *   textOverrides: { "$SM": { texts: ["第一個文字圖層", …], style: { font, size, color, align } } }
+ * texts 依圖層裡文字圖層由上往下的順序；style 套到該圖層所有文字圖層。
+ */
+function normalizeTextOverrides(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const out = {};
+  Object.keys(raw).forEach((name) => {
+    const item = raw[name];
+    if (!item || typeof item !== "object") {
+      return;
+    }
+    const entry = {};
+    if (Array.isArray(item.texts)) {
+      entry.texts = item.texts.map((text) => String(text == null ? "" : text));
+    }
+    if (item.style && typeof item.style === "object") {
+      const style = {};
+      if (item.style.font) {
+        style.font = String(item.style.font);
+      }
+      const size = Number(item.style.size);
+      if (size > 0) {
+        style.size = size;
+      }
+      const color = String(item.style.color || "");
+      if (/^#?[0-9a-f]{6}$/i.test(color)) {
+        style.color = `#${color.replace("#", "").toUpperCase()}`;
+      }
+      if (["left", "center", "right"].includes(item.style.align)) {
+        style.align = item.style.align;
+      }
+      if (Object.keys(style).length) {
+        entry.style = style;
+      }
+    }
+    if (entry.texts || entry.style) {
+      out[name] = entry;
+    }
+  });
+  return Object.keys(out).length ? out : null;
+}
+
+// 勾選「獨立」的 Resize 樣板：文字與圖層大小自己設定，不和其他樣板共用／同步
+function isIndependentVariant(variant) {
+  return Boolean(variant && variant.independent);
 }
 
 // 樣板自己的版面尺寸，沒設定就用模組的寬高
@@ -2176,6 +2234,16 @@ async function generateResizeDocuments(master, values) {
             canvasH,
             job.variant.order,
           );
+          if (isIndependentVariant(job.variant) && job.variant.textOverrides) {
+            // 獨立樣板自己的文字只改在這份產出檔
+            for (const layerName of Object.keys(job.variant.textOverrides)) {
+              const layer = findNamedLayer(newDoc, layerName);
+              if (layer) {
+                await applyTextOverride(newDoc, layer, job.variant.textOverrides[layerName]);
+              }
+            }
+            app.activeDocument = newDoc;
+          }
           await applyResizeVariantLayout(newDoc, job.variant, canvasW, canvasH);
           await saveDocumentAsPsd(newDoc, job.file);
         },
@@ -2249,7 +2317,7 @@ async function readLayerBoundsByIds(docId, layerId) {
   }
 }
 
-async function exportLayerPreviewPng(master, layer, file, name) {
+async function exportLayerPreviewPng(master, layer, file, name, prepare) {
   const temp = await app.createDocument({
     width: unitNumber(master.width),
     height: unitNumber(master.height),
@@ -2276,6 +2344,11 @@ async function exportLayerPreviewPng(master, layer, file, name) {
       copy.visible = true;
     } catch (_error) {
       // 唯讀屬性略過
+    }
+    if (prepare) {
+      // 例如獨立樣板：先套上自己的文字再匯出
+      await prepare(temp, copy);
+      app.activeDocument = temp;
     }
 
     // 與排版邏輯同用 boundsNoEffects：把圖層拉到 (0,0) 再把畫布縮成圖層大小
@@ -2695,6 +2768,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     variantIndex: 0,
     elementName: mode.editableNames()[0],
     previewCache: null,
+    // 獨立樣板自己的文字預覽圖（key：母版 id + 圖層 + 設定）
+    overrideImages: {},
     drag: null,
     images: {},
     selection: null,
@@ -2757,7 +2832,63 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return replaced;
       }
     }
+    const own = overrideImage(name);
+    if (own) {
+      return own;
+    }
     return (cache && cache.images[name]) || null;
+  }
+
+  // ----- 獨立樣板自己的文字 -----
+
+  // 目前選的是獨立樣板（Resize）才回傳它
+  function verticalVariant() {
+    const variant = isApply ? null : currentVariant();
+    return isIndependentVariant(variant) ? variant : null;
+  }
+
+  function textOverrideOf(variant, name, create) {
+    if (!variant) {
+      return null;
+    }
+    if (!variant.textOverrides && create) {
+      variant.textOverrides = {};
+    }
+    const overrides = variant.textOverrides;
+    if (overrides && !overrides[name] && create) {
+      overrides[name] = {};
+    }
+    return overrides ? overrides[name] || null : null;
+  }
+
+  // 獨立樣板有自己的文字時，預覽改用套上那些文字後匯出的圖（第一次需要時在背景產生）
+  function overrideImage(name) {
+    const variant = verticalVariant();
+    const override = textOverrideOf(variant, name, false);
+    if (!override || !isDocumentOpen(state.master)) {
+      return null;
+    }
+    const key = `${state.master.id}|${name}|${JSON.stringify(override)}`;
+    const hit = state.overrideImages[key];
+    if (hit) {
+      return hit.image || null;
+    }
+    state.overrideImages[key] = { pending: true };
+    const master = state.master;
+    whilePhotoshopBusy(() =>
+      buildTextOverridePreview(master, name, mode.required(), layerNames(), override),
+    )
+      .then((image) => {
+        state.overrideImages[key] = { image };
+        if (state.master && state.master.id === master.id) {
+          renderPreview();
+        }
+      })
+      .catch((error) => {
+        state.overrideImages[key] = { image: null };
+        setStatus(`獨立樣板的文字預覽失敗：${describeModalError(error)}`);
+      });
+    return null;
   }
 
   function isDraftSelected() {
@@ -2931,7 +3062,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     };
   }
 
+  // 「獨立」勾選框跟著目前的 Resize 樣板
+  function updateIndependentCheck() {
+    const check = el("independent-check");
+    if (!check) {
+      return;
+    }
+    const variant = currentVariant();
+    check.checked = isIndependentVariant(variant);
+    check.disabled = !variant;
+  }
+
   function loadFields() {
+    updateIndependentCheck();
     const rawSpec = currentSpec();
     const spec =
       rawSpec && state.elementName === "$BG" ? coveredBackgroundSpec(rawSpec) : rawSpec;
@@ -3289,14 +3432,26 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await syncApplyLayers(template, source);
       return;
     }
+    // 勾選「獨立」的樣板自己設定，不跟其他樣板同步
+    if (isIndependentVariant(source)) {
+      setStatus(`「${variantLabel(source)}」是獨立樣板，不與其他樣板同步圖層大小。`);
+      await app.showAlert(`「${variantLabel(source)}」勾選了「獨立」，大小自己設定，不會同步到其他樣板。`);
+      return;
+    }
+    const targets = template.values.variants.filter(
+      (variant) => variant !== source && !isIndependentVariant(variant),
+    );
+    const skipped = template.values.variants.filter(
+      (variant) => variant !== source && isIndependentVariant(variant),
+    );
+    el("sync-dialog-text").textContent = skipped.length
+      ? `請問要同步全部的圖層大小嗎?（獨立樣板 ${skipped.map(variantLabel).join("、")} 不會同步）`
+      : "請問要同步全部的圖層大小嗎?";
     if (!(await showDialog(el("sync-dialog"), "同步圖層大小"))) {
       return;
     }
     commitFields();
-    for (const variant of template.values.variants) {
-      if (variant === source) {
-        continue;
-      }
+    for (const variant of targets) {
       for (const name of positionNames()) {
         if (source.elements[name] && variant.elements[name]) {
           copyFrameSize(source.elements[name], variant.elements[name]);
@@ -3311,7 +3466,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
     }
     await persist(
-      `已將「${variantLabel(source)}」的圖層大小同步到其他樣板`,
+      skipped.length
+        ? `已將「${variantLabel(source)}」的圖層大小同步到其他樣板（獨立樣板不同步）`
+        : `已將「${variantLabel(source)}」的圖層大小同步到其他樣板`,
       "已同步圖層大小",
     );
   }
@@ -3422,8 +3579,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       setStatus(`${name} 沒有可編輯的文字`);
       return;
     }
+    // 獨立樣板有自己的文字就顯示它的（文字圖層數量要一致）
+    const variant = verticalVariant();
+    const own = textOverrideOf(variant, name, false);
+    if (own && own.texts && own.texts.length === texts.length) {
+      texts = texts.map((item, i) => ({ name: item.name, text: own.texts[i] }));
+    }
     if (state.textEditor && state.master && state.master.id === master.id) {
-      showTextEditor(name, texts);
+      showTextEditor(name, texts, variant);
     } else {
       state.textEditor = null;
     }
@@ -3441,7 +3604,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     };
   }
 
-  function showTextEditor(name, texts) {
+  function showTextEditor(name, texts, variant) {
     const box = document.createElement("div");
     box.className = "text-editor";
     // 預覽圖片各有 z-index（層級），編輯框要比全部都高才不會被蓋住、點得到按鈕
@@ -3504,12 +3667,16 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     actions.appendChild(confirm);
     box.appendChild(actions);
 
-    state.textEditor = { name, master: state.master, texts, inputs, box };
+    state.textEditor = { name, master: state.master, texts, inputs, box, variant: variant || null };
     // 放在預覽區裡會被圖層圖片蓋住（UXP 的 z-index 不可靠）：
     // 跟「套圖圖層」下拉一樣移到分頁最後，再依預覽區位置擺到圖層旁邊
     root.appendChild(box);
     positionTextEditor(box, name);
-    setStatus(`修改 ${name} 的文字，按「確認」寫回 PSD 並存檔`);
+    setStatus(
+      variant
+        ? `修改「${variantLabel(variant)}」自己的 ${name} 文字（獨立樣板，不改 PSD 與其他樣板）`
+        : `修改 ${name} 的文字，按「確認」寫回 PSD 並存檔`,
+    );
     try {
       inputs[0].focus();
     } catch (_error) {
@@ -3574,6 +3741,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const values = editor.inputs.map((input) => input.value.replace(/\r\n?|\n/g, "\r"));
+    if (editor.variant) {
+      // 獨立樣板：文字存在這個樣板（module.json），不改 PSD
+      textOverrideOf(editor.variant, editor.name, true).texts = values;
+      if (editor.box && editor.box.parentNode) {
+        editor.box.parentNode.removeChild(editor.box);
+      }
+      state.textEditor = null;
+      renderPreview();
+      await saveOverride(`已更新「${variantLabel(editor.variant)}」自己的 ${editor.name} 文字`);
+      return;
+    }
     // 文字沒改也照樣寫回存檔：順便把之前被裁掉的智慧型物件畫布放大
     editor.saving = true;
     if (editor.box.parentNode) {
@@ -3599,6 +3777,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     await showToast("已更新文字並存檔");
   }
 
+  async function saveOverride(message) {
+    if (isDraftSelected()) {
+      setStatus(`${message}（按「新增」後存進 module.json）`);
+      await showToast("已更新獨立樣板文字");
+      return;
+    }
+    await persist(message, "已更新獨立樣板文字");
+  }
+
   function updatePreviewFromFields() {
     applyElementStyle(state.elementName, readFieldsAsSpec());
     updateSelectionBox();
@@ -3606,6 +3793,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   async function refreshPreview(force) {
     refreshExtraNames();
+    if (force) {
+      state.overrideImages = {};
+    }
     const master = state.master;
     if (!isDocumentOpen(master)) {
       state.previewCache = null;
@@ -3932,6 +4122,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await app.showAlert(`${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`);
       return;
     }
+    // 獨立樣板：顯示它自己的樣式（沒有就從 PSD 的開始改）
+    const variant = verticalVariant();
+    const own = textOverrideOf(variant, name, false);
+    if (own && own.style) {
+      style = { ...style, ...own.style };
+    }
 
     // 字型清單：目前字型找不到時（缺字型）放在第一項，代表維持不變
     textStyle.fonts = textStyle.fonts || listFonts();
@@ -3977,6 +4173,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       color: `#${color.replace("#", "").toUpperCase()}`,
       align: textStyle.align,
     };
+    if (variant) {
+      // 獨立樣板：樣式存在這個樣板，不改 PSD
+      const override = textOverrideOf(variant, name, true);
+      override.style = { ...next, font: next.font || (override.style && override.style.font) || "" };
+      if (!override.style.font) {
+        delete override.style.font;
+      }
+      renderPreview();
+      await saveOverride(`已更新「${variantLabel(variant)}」自己的 ${name} 文字樣式`);
+      return;
+    }
     setStatus(`更新 ${name} 的文字樣式並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
@@ -4027,6 +4234,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     owners.forEach((template) => {
       (template.values ? template.values.variants : []).forEach((variant) => {
         delete variant.elements[name];
+        if (variant.textOverrides) {
+          delete variant.textOverrides[name];
+        }
         if (Array.isArray(variant.order)) {
           variant.order = variant.order.filter((item) => item !== name);
         }
@@ -4479,6 +4689,26 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   });
   el("text-color").addEventListener("input", updateColorSwatch);
   el("text-color-swatch").addEventListener("click", onSwatchClick);
+  if (el("independent-check")) {
+    el("independent-check").addEventListener("change", () => {
+      const variant = currentVariant();
+      if (!variant) {
+        updateIndependentCheck();
+        return;
+      }
+      if (el("independent-check").checked) {
+        variant.independent = true;
+      } else {
+        delete variant.independent;
+      }
+      renderPreview();
+      setStatus(
+        variant.independent
+          ? `「${variantLabel(variant)}」設為獨立：文字與圖層大小只改這個樣板，按「儲存設定值」保存`
+          : `「${variantLabel(variant)}」改回共用：按「儲存設定值」保存`,
+      );
+    });
+  }
   if (el("btn-canvas-size")) {
     el("btn-canvas-size").addEventListener("click", openCanvasSize);
     el("btn-canvas-size-cancel").addEventListener("click", () => el("canvas-size-dialog").close("cancel"));
@@ -5843,6 +6073,63 @@ async function withLayerTexts(master, layerName, required, names, task, save) {
     await master.save();
   }
   return result;
+}
+
+// 把獨立樣板自己的文字／樣式套到某文件裡的圖層（預覽暫存文件或產出的文件，不碰母版）
+async function applyTextOverride(doc, layer, override) {
+  if (!override || (!override.texts && !override.style)) {
+    return;
+  }
+  app.activeDocument = doc;
+  const apply = async (layers) => {
+    for (let i = 0; i < layers.length; i++) {
+      if (override.texts && i < override.texts.length) {
+        await writeLayerText(layers[i], override.texts[i]);
+      }
+      if (override.style) {
+        applyTextStyle(layers[i], override.style);
+      }
+    }
+  };
+  if (isTextLayer(layer) || (!isSmartObject(layer) && canSearchChildren(layer))) {
+    await apply(isTextLayer(layer) ? [layer] : collectTextLayers(layer));
+    return;
+  }
+  if (!isSmartObject(layer)) {
+    return;
+  }
+  const inner = await openSmartObjectContents(doc, layer);
+  try {
+    await apply(collectTextLayers(inner));
+    await revealAllCanvas();
+    await inner.save();
+  } finally {
+    await closeDocumentQuietly(inner);
+    app.activeDocument = doc;
+  }
+}
+
+// 獨立樣板的文字預覽：在暫存文件複製圖層、套上自己的文字後匯出
+async function buildTextOverridePreview(master, layerName, required, names, override) {
+  const tempFolder = await localFileSystem.getTemporaryFolder();
+  const file = await tempFolder.createFile(`preview-override-${master.id}-${Date.now()}.png`, {
+    overwrite: true,
+  });
+  let size = null;
+  await runModal(async () => {
+    await closeLeftoverPreviewDocuments();
+    const container = getMcdSourceContainer(master, required, names);
+    const layer = findNamedLayer(container, layerName);
+    if (!layer) {
+      throw new Error(`找不到圖層 ${layerName}`);
+    }
+    size = await exportLayerPreviewPng(master, layer, file, layerName, (temp, copy) =>
+      applyTextOverride(temp, copy, override),
+    );
+    app.activeDocument = master;
+  }, "擷取獨立樣板的文字");
+  const buffer = await file.read({ format: formats.binary });
+  return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
 }
 
 // 讀出圖層裡的文字：[{ name, text }]，沒有文字回傳空陣列
