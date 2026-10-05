@@ -235,16 +235,24 @@
         min-height: 48px;
       }
 
-.text-editor-style {
-        margin-right: auto;
-      }
-
-            .text-editor-actions {
+.text-editor-actions {
         display: flex;
         flex-direction: row;
-        justify-content: flex-end;
+        width: 100%;
+        box-sizing: border-box;
         gap: 6px;
         margin-top: 6px;
+      }
+
+      /* 四個按鈕平分整列寬度，不會擠出框外 */
+      .text-editor-actions .small-btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 0 4px;
+      }
+
+      .text-editor-hint {
+        white-space: normal;
       }
 
       .preview-selection {
