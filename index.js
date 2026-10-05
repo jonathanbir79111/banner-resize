@@ -3752,6 +3752,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await saveOverride(`已更新「${variantLabel(editor.variant)}」自己的 ${editor.name} 文字`);
       return;
     }
+    // 共用樣板要改 PSD 了：還沒有自己文字的獨立樣板先記下「改之前」的文字，不被這次修改影響
+    const frozen = freezeIndependent(
+      editor.name,
+      "texts",
+      editor.texts.map((item) => item.text.replace(/\r\n?|\n/g, "\r")),
+    );
     // 文字沒改也照樣寫回存檔：順便把之前被裁掉的智慧型物件畫布放大
     editor.saving = true;
     if (editor.box.parentNode) {
@@ -3770,11 +3776,43 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     state.textEditor = null;
+    if (frozen) {
+      await persist(`獨立樣板保留原本的 ${editor.name} 文字`);
+    }
     if (state.master && state.master.id === editor.master.id) {
       await refreshPreview(true);
     }
     setStatus(`已更新 ${editor.name} 的文字並存檔`);
     await showToast("已更新文字並存檔");
+  }
+
+  // 同一份 PSD 的模組裡，勾了「獨立」但這個圖層還沒有自己 key（texts／style）的樣板：
+  // 存一份目前（改之前）的值，之後共用樣板改 PSD 就不會影響它。回傳記了幾個樣板
+  function freezeIndependent(name, key, value) {
+    const path = readDocumentPath(state.master);
+    const owners = templates().filter(
+      (template) =>
+        template === currentTemplate() ||
+        (template.source && path && template.source.path === path),
+    );
+    if (state.draft && state.draft.values) {
+      owners.push(state.draft);
+    }
+    let count = 0;
+    owners.forEach((template) => {
+      (template.values ? template.values.variants : []).forEach((variant) => {
+        if (!isIndependentVariant(variant)) {
+          return;
+        }
+        const existing = textOverrideOf(variant, name, false);
+        if (existing && existing[key] !== undefined) {
+          return;
+        }
+        textOverrideOf(variant, name, true)[key] = deepClone(value);
+        count += 1;
+      });
+    });
+    return count;
   }
 
   async function saveOverride(message) {
@@ -4122,6 +4160,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await app.showAlert(`${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`);
       return;
     }
+    const psdStyle = { ...style };
     // 獨立樣板：顯示它自己的樣式（沒有就從 PSD 的開始改）
     const variant = verticalVariant();
     const own = textOverrideOf(variant, name, false);
@@ -4184,6 +4223,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await saveOverride(`已更新「${variantLabel(variant)}」自己的 ${name} 文字樣式`);
       return;
     }
+    // 共用樣板要改 PSD：還沒有自己樣式的獨立樣板先記下改之前的樣式
+    const frozen = freezeIndependent(name, "style", psdStyle);
     setStatus(`更新 ${name} 的文字樣式並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
@@ -4193,6 +4234,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       setStatus(`更新文字樣式失敗：${describeModalError(error)}`);
       await app.showAlert(`更新文字樣式失敗：${describeModalError(error)}`);
       return;
+    }
+    if (frozen) {
+      await persist(`獨立樣板保留原本的 ${name} 文字樣式`);
     }
     if (state.master && state.master.id === master.id) {
       await refreshPreview(true);
