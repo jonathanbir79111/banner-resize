@@ -1505,6 +1505,9 @@ function normalizeTextOverrides(raw) {
       if (["left", "center", "right"].includes(item.style.align)) {
         style.align = item.style.align;
       }
+      if (["horizontal", "vertical"].includes(item.style.orientation)) {
+        style.orientation = item.style.orientation;
+      }
       if (Object.keys(style).length) {
         entry.style = style;
       }
@@ -3662,6 +3665,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     style.className = "small-btn text-editor-style";
     style.textContent = "編輯";
     style.addEventListener("click", openStyleFromEditor);
+    // 「轉向」：橫排 ↔ 直排
+    const turn = document.createElement("button");
+    turn.type = "button";
+    turn.className = "small-btn";
+    turn.textContent = "轉向";
+    turn.addEventListener("click", toggleOrientationFromEditor);
+    actions.appendChild(turn);
     actions.appendChild(style);
     actions.appendChild(cancel);
     actions.appendChild(confirm);
@@ -3703,9 +3713,83 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const stageRect = stage.getBoundingClientRect();
     const stageW = stageRect.width || stage.clientWidth;
     const stageH = stageRect.height || stage.clientHeight;
-    box.style.left = `${stageRect.left - rootRect.left + (stageW * position.left) / 100}px`;
+    // 寬度依面板（不是預覽區）：直式版面的預覽很窄，按鈕才不會擠出框外
+    const rootW = rootRect.width || root.clientWidth || stageW;
+    const width = Math.min(Math.max(rootW * 0.5, 280), rootW);
+    const left = stageRect.left - rootRect.left + (stageW * position.left) / 100;
+    box.style.left = `${clampNumber(left, 0, Math.max(rootW - width, 0))}px`;
     box.style.top = `${stageRect.top - rootRect.top + (stageH * position.top) / 100}px`;
-    box.style.width = `${Math.max(stageW * 0.45, 180)}px`;
+    box.style.width = `${width}px`;
+  }
+
+  // 已經改了文字就先寫回存檔，再切換橫排／直排
+  async function toggleOrientationFromEditor() {
+    const editor = state.textEditor;
+    if (!editor || !editor.inputs || editor.saving) {
+      return;
+    }
+    const changed = editor.inputs.some(
+      (input, i) =>
+        input.value.replace(/\r\n?|\n/g, "\r") !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
+    );
+    if (changed) {
+      await confirmTextEditor();
+    } else {
+      closeTextEditor();
+    }
+    await toggleOrientation(editor.name);
+  }
+
+  async function toggleOrientation(name) {
+    if (!isDocumentOpen(state.master)) {
+      return;
+    }
+    const master = state.master;
+    let style;
+    try {
+      style = await whilePhotoshopBusy(() =>
+        readTextStyle(master, name, mode.required(), layerNames()),
+      );
+    } catch (error) {
+      setStatus(`無法讀取文字方向：${describeModalError(error)}`);
+      return;
+    }
+    if (!style) {
+      setStatus(`${name} 沒有文字`);
+      return;
+    }
+    const variant = verticalVariant();
+    const own = textOverrideOf(variant, name, false);
+    const current = (own && own.style && own.style.orientation) || style.orientation || "horizontal";
+    const next = current === "vertical" ? "horizontal" : "vertical";
+    const label = next === "vertical" ? "直排" : "橫排";
+    if (variant) {
+      // 獨立樣板：方向存在這個樣板，不改 PSD
+      const override = textOverrideOf(variant, name, true);
+      override.style = { ...(override.style || {}), orientation: next };
+      renderPreview();
+      await saveOverride(`已將「${variantLabel(variant)}」的 ${name} 改為${label}`);
+      return;
+    }
+    const frozen = freezeIndependent(name, "style", style);
+    setStatus(`將 ${name} 改為${label}並存檔中…`);
+    try {
+      await whilePhotoshopBusy(() =>
+        writeTextStyle(master, name, mode.required(), layerNames(), { orientation: next }),
+      );
+    } catch (error) {
+      setStatus(`轉向失敗：${describeModalError(error)}`);
+      await app.showAlert(`轉向失敗：${describeModalError(error)}`);
+      return;
+    }
+    if (frozen) {
+      await persist(`獨立樣板保留原本的 ${name} 方向`);
+    }
+    if (state.master && state.master.id === master.id) {
+      await refreshPreview(true);
+    }
+    setStatus(`已將 ${name} 改為${label}並存檔`);
+    await showToast(`已改為${label}`);
   }
 
   // 已經改了文字就先寫回存檔，再開文字樣式
@@ -4215,7 +4299,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (variant) {
       // 獨立樣板：樣式存在這個樣板，不改 PSD
       const override = textOverrideOf(variant, name, true);
-      override.style = { ...next, font: next.font || (override.style && override.style.font) || "" };
+      override.style = {
+        ...(override.style || {}),
+        ...next,
+        font: next.font || (override.style && override.style.font) || "",
+      };
       if (!override.style.font) {
         delete override.style.font;
       }
@@ -6131,7 +6219,7 @@ async function applyTextOverride(doc, layer, override) {
         await writeLayerText(layers[i], override.texts[i]);
       }
       if (override.style) {
-        applyTextStyle(layers[i], override.style);
+        await applyTextStyle(layers[i], override.style);
       }
     }
   };
@@ -6375,10 +6463,16 @@ function textStyleOf(layer) {
   } catch (_error) {
     // 讀不到對齊就當靠左
   }
-  return { font: String(cs.font || ""), size: roundTo(unitNumber(cs.size), 2), color, align };
+  let orientation = "horizontal";
+  try {
+    orientation = String(item.orientation).toLowerCase().includes("vertical") ? "vertical" : "horizontal";
+  } catch (_error) {
+    // 讀不到就當橫排
+  }
+  return { font: String(cs.font || ""), size: roundTo(unitNumber(cs.size), 2), color, align, orientation };
 }
 
-function applyTextStyle(layer, style) {
+async function applyTextStyle(layer, style) {
   const item = layer.textItem;
   if (!item || !item.characterStyle) {
     throw new Error("這個版本的 Photoshop 無法修改文字樣式");
@@ -6397,6 +6491,31 @@ function applyTextStyle(layer, style) {
   }
   if (style.align && constants.Justification) {
     item.paragraphStyle.justification = constants.Justification[style.align.toUpperCase()];
+  }
+  if (style.orientation) {
+    // 橫排／直排
+    let done = false;
+    const value = constants.Orientation && constants.Orientation[style.orientation.toUpperCase()];
+    if (value !== undefined) {
+      try {
+        item.orientation = value;
+        done = true;
+      } catch (_error) {
+        // 改用 batchPlay
+      }
+    }
+    if (!done) {
+      await action.batchPlay(
+        [
+          {
+            _obj: "set",
+            _target: [{ _ref: "textLayer", _id: layer.id }],
+            to: { _obj: "textLayer", orientation: { _enum: "orientation", _value: style.orientation } },
+          },
+        ],
+        { synchronousExecution: true },
+      );
+    }
   }
 }
 
@@ -6417,7 +6536,9 @@ async function writeTextStyle(master, layerName, required, names, style) {
       if (!layers.length) {
         throw new Error(`${layerName} 沒有文字`);
       }
-      layers.forEach((layer) => applyTextStyle(layer, style));
+      for (const layer of layers) {
+        await applyTextStyle(layer, style);
+      }
     }, true);
   }, "更新文字樣式");
 }
