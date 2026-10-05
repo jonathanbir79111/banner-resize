@@ -178,6 +178,16 @@
         color: #ccc;
       }
 
+      .independent-label {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: white;
+        white-space: nowrap;
+      }
+
       .size-label {
         flex: 0 0 90px;
         color: #ccc;
@@ -748,6 +758,10 @@
           <div class="preview-stage" data-role="preview-stage"></div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
+            <label class="independent-label" title="勾選後按「儲存設定值」：這個樣板的文字與圖層大小獨立，不和其他樣板共用">
+              <input type="checkbox" data-role="independent-check" />
+              獨立
+            </label>
             <button type="button" data-role="btn-canvas-size">調整版面尺寸</button>
             <button type="button" data-role="btn-add-text">新增文字</button>
             <button type="button" data-role="btn-reset-defaults">
@@ -836,7 +850,7 @@
 
           <dialog data-role="sync-dialog">
             <div class="dialog-body">
-              <p class="dialog-text">請問要同步全部的圖層大小嗎?</p>
+              <p class="dialog-text" data-role="sync-dialog-text">請問要同步全部的圖層大小嗎?</p>
               <div class="manager-actions">
                 <sp-button data-role="btn-sync-cancel" variant="secondary"
                   >取消</sp-button
