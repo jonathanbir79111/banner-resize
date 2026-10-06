@@ -178,6 +178,29 @@
         color: #ccc;
       }
 
+      .preview-grid-line {
+        position: absolute;
+        background: #3ee6f0;
+        pointer-events: none;
+      }
+
+      .preview-grid-line.is-vertical {
+        top: 0;
+        bottom: 0;
+        width: 1px;
+      }
+
+      .preview-grid-line.is-horizontal {
+        left: 0;
+        right: 0;
+        height: 1px;
+      }
+
+      .grid-check-label {
+        display: flex;
+        align-items: center;
+      }
+
       .independent-label {
         display: flex;
         flex-direction: row;
@@ -748,6 +771,10 @@
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
                 <div class="title-buttons">
+                  <label class="grid-check-label" title="顯示格線">
+                    <input type="checkbox" data-role="grid-check" />
+                  </label>
+                  <button type="button" class="small-btn" data-role="btn-grid">格線</button>
                   <button
                     type="button"
                     class="small-btn"
@@ -852,6 +879,41 @@
               <div class="manager-actions">
                 <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
                 <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="grid-dialog">
+            <div class="dialog-body manager-body">
+              <div data-role="grid-edit-view">
+                <div class="style-row">
+                  <span class="style-label">直</span>
+                  <input type="text" class="text-input style-input" data-role="grid-vertical" />
+                <div class="stepper">
+                  <button type="button" data-grid-step="vertical" data-grid-dir="up">▲</button>
+                  <button type="button" data-grid-step="vertical" data-grid-dir="down">▼</button>
+                </div>
+                </div>
+                <div class="style-row">
+                  <span class="style-label">橫</span>
+                  <input type="text" class="text-input style-input" data-role="grid-horizontal" />
+                <div class="stepper">
+                  <button type="button" data-grid-step="horizontal" data-grid-dir="up">▲</button>
+                  <button type="button" data-grid-step="horizontal" data-grid-dir="down">▼</button>
+                </div>
+                </div>
+                <p class="hint" data-role="grid-error"></p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-grid-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-grid-save" variant="cta">儲存</sp-button>
+                </div>
+              </div>
+              <div data-role="grid-confirm-view" style="display: none">
+                <p class="dialog-text">確認儲存設定</p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-grid-confirm-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-grid-confirm-ok" variant="cta">確認</sp-button>
+                </div>
               </div>
             </div>
           </dialog>
@@ -1183,6 +1245,10 @@
               <div class="picker-title-row">
                 <span class="picker-title">圖層</span>
                 <div class="title-buttons">
+                  <label class="grid-check-label" title="顯示格線">
+                    <input type="checkbox" data-role="grid-check" />
+                  </label>
+                  <button type="button" class="small-btn" data-role="btn-grid">格線</button>
                   <button
                     type="button"
                     class="small-btn"
@@ -1326,6 +1392,41 @@
               <div class="manager-actions">
                 <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
                 <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+              </div>
+            </div>
+          </dialog>
+
+          <dialog data-role="grid-dialog">
+            <div class="dialog-body manager-body">
+              <div data-role="grid-edit-view">
+                <div class="style-row">
+                  <span class="style-label">直</span>
+                  <input type="text" class="text-input style-input" data-role="grid-vertical" />
+                <div class="stepper">
+                  <button type="button" data-grid-step="vertical" data-grid-dir="up">▲</button>
+                  <button type="button" data-grid-step="vertical" data-grid-dir="down">▼</button>
+                </div>
+                </div>
+                <div class="style-row">
+                  <span class="style-label">橫</span>
+                  <input type="text" class="text-input style-input" data-role="grid-horizontal" />
+                <div class="stepper">
+                  <button type="button" data-grid-step="horizontal" data-grid-dir="up">▲</button>
+                  <button type="button" data-grid-step="horizontal" data-grid-dir="down">▼</button>
+                </div>
+                </div>
+                <p class="hint" data-role="grid-error"></p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-grid-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-grid-save" variant="cta">儲存</sp-button>
+                </div>
+              </div>
+              <div data-role="grid-confirm-view" style="display: none">
+                <p class="dialog-text">確認儲存設定</p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-grid-confirm-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-grid-confirm-ok" variant="cta">確認</sp-button>
+                </div>
               </div>
             </div>
           </dialog>
