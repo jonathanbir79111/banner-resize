@@ -3040,8 +3040,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!template) {
       return BUILTIN_RESIZE_VALUES;
     }
-    // 套圖的畫布＝PSD 原稿；Resize 可以每個樣板各自設定版面尺寸
-    return isApply ? template.values : variantCanvasSize(template.values, currentVariant());
+    // 預設是模組的寬高（套圖＝PSD 原稿）；「調整版面尺寸」可以讓每個樣板／每組套圖各自設定
+    return variantCanvasSize(template.values, currentVariant());
   }
 
   function variantLabel(variant) {
@@ -4231,11 +4231,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   // 預覽區不吃滑鼠滾輪：避免誤滑讓圖片左右位移，滾輪改為捲動整個面板
-  stage.addEventListener("wheel", (event) => {
-    event.preventDefault();
-    const scroller = document.scrollingElement || document.body;
-    scroller.scrollTop += event.deltaY;
-  });
   stage.addEventListener("scroll", () => {
     if (stage.scrollLeft || stage.scrollTop) {
       stage.scrollLeft = 0;
@@ -6218,6 +6213,13 @@ async function generateApplyDocuments(master, sets, variantFor) {
           }
           // 再依面板上這一組的版面（靠左／靠上／寬度／高度）擺放每個圖層
           const variant = variantFor(set);
+          if (variant && variant.width > 0 && variant.height > 0) {
+            // 「調整版面尺寸」：先把畫布改成這一組的尺寸（置中），再照百分比排版
+            if (container !== copy) {
+              throw new Error("PSD 使用工作區域，暫不支援調整版面尺寸");
+            }
+            await copy.resizeCanvas(variant.width, variant.height, constants.AnchorPosition.MIDDLECENTER);
+          }
           if (variant) {
             const frame =
               container === copy

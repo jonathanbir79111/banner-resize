@@ -1037,7 +1037,7 @@
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
-              <input type="number" data-role="field-leftPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-leftPercent" />
               <div class="stepper">
                 <button
                   type="button"
@@ -1057,7 +1057,7 @@
             </div>
             <div class="settings-field-row">
               <label>靠上%</label>
-              <input type="number" data-role="field-topPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-topPercent" />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
                 <button
@@ -1078,7 +1078,7 @@
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
-              <input type="number" data-role="field-widthPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-widthPercent" />
               <div class="stepper">
                 <button
                   type="button"
@@ -1099,7 +1099,8 @@
             <div class="settings-field-row">
               <label>高度%</label>
               <input
-                type="number"
+                type="text"
+                inputmode="decimal"
                 data-role="field-heightPercent"
                 step="0.1"
                 placeholder="不限（隨圖層比例）"
@@ -1346,6 +1347,7 @@
           <div class="preview-stage" data-role="preview-stage"></div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
+            <button type="button" data-role="btn-canvas-size">調整版面尺寸</button>
             <button type="button" data-role="btn-add-text">新增文字</button>
             <button type="button" data-role="btn-reset-defaults">
               還原預設值
@@ -1354,6 +1356,35 @@
               重新擷取圖層
             </button>
           </div>
+
+          <dialog data-role="canvas-size-dialog">
+            <div class="dialog-body manager-body">
+              <div data-role="canvas-size-edit-view">
+                <div class="style-row">
+                  <span class="size-label">版面尺寸寬度</span>
+                  <input type="text" class="text-input style-input" data-role="canvas-width" />
+                  <span class="style-unit">像素</span>
+                </div>
+                <div class="style-row">
+                  <span class="size-label">版面尺寸高度</span>
+                  <input type="text" class="text-input style-input" data-role="canvas-height" />
+                  <span class="style-unit">像素</span>
+                </div>
+                <p class="hint" data-role="canvas-size-error"></p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-canvas-size-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-canvas-size-save" variant="cta">儲存</sp-button>
+                </div>
+              </div>
+              <div data-role="canvas-size-confirm-view" style="display: none">
+                <p class="dialog-text" data-role="canvas-size-confirm-text">確認要更改此版面尺寸？</p>
+                <div class="manager-actions">
+                  <sp-button data-role="btn-canvas-size-confirm-cancel" variant="secondary">取消</sp-button>
+                  <sp-button data-role="btn-canvas-size-confirm-ok" variant="cta">確認</sp-button>
+                </div>
+              </div>
+            </div>
+          </dialog>
 
           <dialog data-role="text-style-dialog">
             <div class="dialog-body manager-body">
@@ -1552,7 +1583,7 @@
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
-              <input type="number" data-role="field-leftPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-leftPercent" />
               <div class="stepper">
                 <button
                   type="button"
@@ -1572,7 +1603,7 @@
             </div>
             <div class="settings-field-row">
               <label>靠上%</label>
-              <input type="number" data-role="field-topPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-topPercent" />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
                 <button
@@ -1593,7 +1624,7 @@
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
-              <input type="number" data-role="field-widthPercent" step="0.1" />
+              <input type="text" inputmode="decimal" data-role="field-widthPercent" />
               <div class="stepper">
                 <button
                   type="button"
@@ -1614,7 +1645,8 @@
             <div class="settings-field-row">
               <label>高度%</label>
               <input
-                type="number"
+                type="text"
+                inputmode="decimal"
                 data-role="field-heightPercent"
                 step="0.1"
                 placeholder="不限（隨圖層比例）"
