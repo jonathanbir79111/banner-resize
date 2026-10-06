@@ -1930,7 +1930,7 @@ async function layoutInFrame(layer, frame, spec, name) {
 }
 
 async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
-  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(doc)];
+  const names = withExtraNames(MCD_SMART_LAYER_NAMES, dollarLayerNames(doc));
   const layers = requireMcdSmartLayers(doc, MCD_SMART_LAYER_NAMES, names);
 
   if (variant.elements.$BG) {
@@ -2196,7 +2196,7 @@ async function openPsdAsMaster(file) {
  */
 // 六個元件 + 「新增文字」加的 $TEXT1…
 function resizeSourceLayers(master) {
-  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(master)];
+  const names = withExtraNames(MCD_SMART_LAYER_NAMES, dollarLayerNames(master));
   const sourceContainer = getMcdSourceContainer(master);
   return requireMcdSmartLayers(sourceContainer, MCD_SMART_LAYER_NAMES, names);
 }
@@ -2837,26 +2837,44 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   const workspace = { root, open, show, commit: commitFields };
 
-  // ----- 圖層名稱：模式本身的圖層 + 母版裡「新增文字」加的 $TEXT1… -----
+  // ----- 圖層名稱：上傳的 PSD 裡所有 $ 開頭的圖層（沒有 PSD 時用模式的預設清單） -----
 
   function refreshExtraNames() {
     try {
-      state.extraNames = isDocumentOpen(state.master) ? extraTextNames(state.master) : [];
+      state.extraNames = isDocumentOpen(state.master) ? dollarLayerNames(state.master) : [];
     } catch (_error) {
       state.extraNames = [];
     }
   }
 
+  // 要找的圖層：模式的清單 + PSD 裡其他 $ 圖層
   function layerNames() {
     return withExtraNames(mode.layerNames(), state.extraNames || []);
   }
 
   function positionNames() {
-    return withExtraNames(mode.positionNames(), state.extraNames || []);
+    return withExtraNames(
+      mode.positionNames(),
+      (state.extraNames || []).filter((name) => name !== "$BG"),
+    );
   }
 
+  // 「圖層」下拉：有 PSD 時只列 PSD 裡有的 $ 圖層（預設清單的順序在前，其餘照 PSD 順序）
   function editableNames() {
-    return withExtraNames(mode.editableNames(), state.extraNames || []);
+    const present = state.extraNames || [];
+    const base = mode.editableNames();
+    if (!present.length) {
+      return base;
+    }
+    // $BG 固定放最後
+    const names = [
+      ...base.filter((name) => present.includes(name) && name !== "$BG"),
+      ...present.filter((name) => !base.includes(name) && name !== "$BG"),
+    ];
+    if (present.includes("$BG")) {
+      names.push("$BG");
+    }
+    return names;
   }
 
   // ----- 目前選取 -----
@@ -5218,7 +5236,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     root.appendChild(layerPanel);
 
     function presentLayers() {
-      const names = applyLayerNames();
+      const names = layerNames();
       if (!isDocumentOpen(state.master)) {
         return names;
       }
@@ -5233,7 +5251,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
 
     function checkedLayers() {
-      return applyLayerNames().filter((name) => {
+      return [...layerBoxes.keys()].filter((name) => {
         const box = layerBoxes.get(name);
         return box && box.checked;
       });
@@ -5247,10 +5265,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       renderPreview();
     }
 
+    // 套圖圖層的勾選清單：有 PSD 時＝PSD 裡的 $ 圖層，沒有 PSD 時＝圖層清單
+    function panelLayerNames() {
+      if (!isDocumentOpen(state.master)) {
+        return applyLayerNames();
+      }
+      const present = presentLayers();
+      return editableNames().filter((name) => present.includes(name));
+    }
+
     function renderLayerPanel() {
       layerPanel.innerHTML = "";
       layerBoxes = new Map();
-      for (const name of applyLayerNames()) {
+      for (const name of panelLayerNames()) {
         const label = document.createElement("label");
         label.className = "layer-check";
         const box = document.createElement("input");
@@ -6202,7 +6229,7 @@ async function generateApplyDocuments(master, sets, variantFor) {
         app.activeDocument = copy;
         try {
           const required = applyRequiredLayers();
-          const names = withExtraNames(applyLayerNames(), extraTextNames(copy));
+          const names = withExtraNames(applyLayerNames(), dollarLayerNames(copy));
           const container = getMcdSourceContainer(copy, required, names);
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
@@ -6501,20 +6528,21 @@ async function writeEditableTexts(master, layerName, required, names, values) {
 const EXTRA_TEXT_PATTERN = /^\$TEXT\d+$/;
 const DEFAULT_NEW_TEXT = "新增文字";
 
-// PSD 裡「新增文字」加過的圖層名稱（$TEXT1、$TEXT2…，依數字排序）
-function extraTextNames(doc) {
-  const found = new Set();
+// PSD 裡所有名稱開頭是 $ 的圖層（含群組／工作區域裡的，不看智慧型物件內部），依圖層面板由上往下
+function dollarLayerNames(doc) {
+  const found = [];
   (function walk(node) {
     for (const layer of listLayers(node)) {
-      if (EXTRA_TEXT_PATTERN.test(String(layer.name))) {
-        found.add(String(layer.name));
+      const name = String(layer.name || "").trim();
+      if (name.startsWith("$") && name.length > 1 && !found.includes(name)) {
+        found.push(name);
       }
       if (canSearchChildren(layer)) {
         walk(layer);
       }
     }
   })(doc);
-  return [...found].sort((a, b) => Number(a.slice(5)) - Number(b.slice(5)));
+  return found;
 }
 
 function withExtraNames(names, extras) {
