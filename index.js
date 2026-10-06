@@ -3439,6 +3439,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         stage.appendChild(img);
       }
     });
+    // 格線要在圖片上面：圖片重新排過後再畫一次
+    renderGrid();
   }
 
   const LAYER_MOVES = {
@@ -3976,6 +3978,76 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     await persist(message, "已更新獨立樣板文字");
+  }
+
+  // ----- 格線：直 N 條、橫 N 條等分參考線（畫在圖層上面、選取框下面，不擋拖拉） -----
+
+  function renderGrid() {
+    stage.querySelectorAll(".preview-grid-line").forEach((line) => {
+      line.parentNode.removeChild(line);
+    });
+    const grid = readGridSettings();
+    if (el("grid-check")) {
+      el("grid-check").checked = grid.visible;
+    }
+    if (!grid.visible || !state.previewCache) {
+      return;
+    }
+    const anchor = state.selection ? state.selection.box : null;
+    const addLine = (vertical, percent) => {
+      const line = document.createElement("div");
+      line.className = `preview-grid-line ${vertical ? "is-vertical" : "is-horizontal"}`;
+      line.style[vertical ? "left" : "top"] = `${percent}%`;
+      if (anchor) {
+        stage.insertBefore(line, anchor);
+      } else {
+        stage.appendChild(line);
+      }
+    };
+    for (let i = 1; i <= grid.vertical; i++) {
+      addLine(true, (i * 100) / (grid.vertical + 1));
+    }
+    for (let i = 1; i <= grid.horizontal; i++) {
+      addLine(false, (i * 100) / (grid.horizontal + 1));
+    }
+  }
+
+  function showGridView(confirm) {
+    el("grid-edit-view").style.display = confirm ? "none" : "block";
+    el("grid-confirm-view").style.display = confirm ? "block" : "none";
+  }
+
+  function readGridFields() {
+    const vertical = Number(el("grid-vertical").value.trim());
+    const horizontal = Number(el("grid-horizontal").value.trim());
+    const valid = (n) => Number.isInteger(n) && n >= 0 && n <= GRID_MAX_LINES;
+    if (!valid(vertical) || !valid(horizontal)) {
+      el("grid-error").textContent = `請輸入 0～${GRID_MAX_LINES} 的整數`;
+      return null;
+    }
+    el("grid-error").textContent = "";
+    return { vertical, horizontal };
+  }
+
+  let gridDraft = null;
+
+  async function openGridSettings() {
+    const grid = readGridSettings();
+    el("grid-vertical").value = String(grid.vertical);
+    el("grid-horizontal").value = String(grid.horizontal);
+    el("grid-error").textContent = "";
+    gridDraft = null;
+    showGridView(false);
+    if (!(await showDialog(el("grid-dialog"), "格線"))) {
+      return;
+    }
+    if (!gridDraft) {
+      return;
+    }
+    writeGridSettings({ ...readGridSettings(), ...gridDraft });
+    renderGrid();
+    setStatus(`格線：直 ${gridDraft.vertical} 條、橫 ${gridDraft.horizontal} 條`);
+    await showToast("已儲存格線設定");
   }
 
   function updatePreviewFromFields() {
@@ -4891,6 +4963,43 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   });
   el("text-color").addEventListener("input", updateColorSwatch);
   el("text-color-swatch").addEventListener("click", onSwatchClick);
+  el("grid-check").addEventListener("change", () => {
+    writeGridSettings({ ...readGridSettings(), visible: el("grid-check").checked });
+    renderGrid();
+  });
+  el("btn-grid").addEventListener("click", openGridSettings);
+  root.querySelectorAll("[data-grid-step]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = el(`grid-${button.getAttribute("data-grid-step")}`);
+      const current = parseInt(input.value, 10);
+      const step = button.getAttribute("data-grid-dir") === "up" ? 1 : -1;
+      const next = (Number.isFinite(current) ? current : 0) + step;
+      input.value = String(clampNumber(next, 0, GRID_MAX_LINES));
+    });
+  });
+  ["grid-vertical", "grid-horizontal"].forEach((role) => {
+    // 只能輸入數字
+    el(role).addEventListener("input", () => {
+      const digits = el(role).value.replace(/[^0-9]/g, "");
+      if (digits !== el(role).value) {
+        el(role).value = digits;
+      }
+    });
+  });
+  el("btn-grid-cancel").addEventListener("click", () => el("grid-dialog").close("cancel"));
+  el("btn-grid-save").addEventListener("click", () => {
+    const grid = readGridFields();
+    if (!grid) {
+      return;
+    }
+    gridDraft = grid;
+    showGridView(true);
+  });
+  el("btn-grid-confirm-cancel").addEventListener("click", () => {
+    gridDraft = null;
+    showGridView(false);
+  });
+  el("btn-grid-confirm-ok").addEventListener("click", () => el("grid-dialog").close("confirm"));
   if (el("independent-check")) {
     el("independent-check").addEventListener("change", () => {
       const variant = currentVariant();
@@ -6729,6 +6838,35 @@ async function deleteLayerFromMaster(master, layerName, required, names) {
     );
     await master.save();
   }, "刪除文字區塊");
+}
+
+// ---------- 預覽格線（等分參考線；存在這台電腦，兩個分頁共用） ----------
+
+const GRID_SETTINGS_KEY = "bannerResizer.grid";
+const GRID_MAX_LINES = 50;
+const DEFAULT_GRID = { vertical: 9, horizontal: 9, visible: false };
+
+function readGridSettings() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GRID_SETTINGS_KEY)) || {};
+    const clampLines = (n, fallback) =>
+      Number.isInteger(n) && n >= 0 && n <= GRID_MAX_LINES ? n : fallback;
+    return {
+      vertical: clampLines(raw.vertical, DEFAULT_GRID.vertical),
+      horizontal: clampLines(raw.horizontal, DEFAULT_GRID.horizontal),
+      visible: raw.visible === true,
+    };
+  } catch (_error) {
+    return { ...DEFAULT_GRID };
+  }
+}
+
+function writeGridSettings(settings) {
+  try {
+    localStorage.setItem(GRID_SETTINGS_KEY, JSON.stringify(settings));
+  } catch (_error) {
+    // 存不了就只在這次使用
+  }
 }
 
 // ---------- 分頁與面板 ----------
