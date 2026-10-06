@@ -3998,6 +3998,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const line = document.createElement("div");
       line.className = `preview-grid-line ${vertical ? "is-vertical" : "is-horizontal"}`;
       line.style[vertical ? "left" : "top"] = `${percent}%`;
+      // 在所有圖層之上（與選取框同層、排在它前面，選取框和控制點仍在最上面）
+      line.style.zIndex = anchor ? anchor.style.zIndex : String(state.previewCache.order.length + 1);
       if (anchor) {
         stage.insertBefore(line, anchor);
       } else {
