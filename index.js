@@ -1835,8 +1835,11 @@ function getMcdSourceContainer(doc, required = MCD_SMART_LAYER_NAMES, names = MC
   const boards = listArtboards(doc);
   for (const board of boards) {
     try {
-      requireMcdSmartLayers(board, required, names);
-      return board;
+      const found = requireMcdSmartLayers(board, required, names);
+      // 沒有必要圖層時：第一個含有任一 $ 圖層的工作區域
+      if (required.length || Object.keys(found).length) {
+        return board;
+      }
     } catch (_error) {
       // 不完整的工作區域略過，改找下一層或整份文件
     }
@@ -1898,7 +1901,10 @@ async function createMcdDocumentFromMaster(
     ? ["$BG", ...layerOrder, ...others]
         .map((layerName) => sourceLayers[layerName])
         .filter(Boolean)
-    : listMcdLayersBottomToTop(getMcdSourceContainer(master), sourceLayers);
+    : listMcdLayersBottomToTop(
+        getMcdSourceContainer(master, [], Object.keys(sourceLayers)),
+        sourceLayers,
+      );
   for (const layer of bottomToTop) {
     await master.duplicateLayers([layer], newDoc);
   }
@@ -1931,9 +1937,10 @@ async function layoutInFrame(layer, frame, spec, name) {
 
 async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
   const names = withExtraNames(MCD_SMART_LAYER_NAMES, dollarLayerNames(doc));
-  const layers = requireMcdSmartLayers(doc, MCD_SMART_LAYER_NAMES, names);
+  // PSD 有哪些 $ 圖層就排哪些（不要求六個都有）
+  const layers = requireMcdSmartLayers(doc, [], names);
 
-  if (variant.elements.$BG) {
+  if (layers.$BG && variant.elements.$BG) {
     await layoutSmartByPercents(
       layers.$BG,
       canvasW,
@@ -1941,13 +1948,13 @@ async function applyResizeVariantLayout(doc, variant, canvasW, canvasH) {
       variant.elements.$BG,
       "$BG",
     );
-  } else {
+  } else if (layers.$BG) {
     await layoutObjectFitCover(layers.$BG, canvasW, canvasH);
   }
 
   for (const name of names.filter((item) => item !== "$BG")) {
-    if (!variant.elements[name]) {
-      continue; // 還沒設定位置的新增文字維持原位
+    if (!layers[name] || !variant.elements[name]) {
+      continue; // PSD 沒有這個圖層，或還沒設定位置的新增文字維持原位
     }
     await layoutSmartByPercents(
       layers[name],
@@ -2056,8 +2063,8 @@ const DEFAULT_REFERENCE_FILE = "MCD-SMART.psd";
 
 // 各圖層寬度佔原稿畫布寬的比例（畫布＝含齊圖層的工作區域，或整份文件）
 function measureRelativeWidths(master) {
-  const container = getMcdSourceContainer(master);
-  const layers = requireMcdSmartLayers(container);
+  const container = getMcdSourceContainer(master, [], MCD_SMART_LAYER_NAMES);
+  const layers = requireMcdSmartLayers(container, [], MCD_SMART_LAYER_NAMES);
   const frame =
     container === master
       ? { left: 0, right: unitNumber(master.width) }
@@ -2065,6 +2072,9 @@ function measureRelativeWidths(master) {
   const frameW = Math.max(frame.right - frame.left, 1);
   const out = {};
   for (const name of MCD_POSITION_ELEMENT_NAMES) {
+    if (!layers[name]) {
+      continue; // PSD 沒有這個圖層
+    }
     const b = readLayerBounds(layers[name]);
     out[name] = Math.max(b.right - b.left, 1) / frameW;
   }
@@ -2107,7 +2117,7 @@ function scaleElementsForDocument(elements, doc) {
   }
   for (const name of MCD_POSITION_ELEMENT_NAMES) {
     const base = reference.widths[name];
-    if (elements[name] && base > 0) {
+    if (elements[name] && base > 0 && widths[name] > 0) {
       elements[name].widthPercent = roundTo(
         Math.min(elements[name].widthPercent * (widths[name] / base), 100),
         2,
@@ -2125,15 +2135,16 @@ function initialValuesForDocument(doc) {
   return values;
 }
 
+// 只要 PSD 裡有 $ 開頭的圖層就能用（不再要求固定的六個圖層）
 function validMasterOrNull(doc) {
-  if (!doc) {
-    return null;
-  }
+  return doc && !dollarMasterProblem(doc) ? doc : null;
+}
+
+function dollarMasterProblem(doc) {
   try {
-    requireMcdSmartLayers(getMcdSourceContainer(doc));
-    return doc;
-  } catch (_error) {
-    return null;
+    return dollarLayerNames(doc).length ? "" : "PSD 裡沒有名稱以 $ 開頭的圖層";
+  } catch (error) {
+    return error.message || String(error);
   }
 }
 
@@ -2197,8 +2208,8 @@ async function openPsdAsMaster(file) {
 // 六個元件 + 「新增文字」加的 $TEXT1…
 function resizeSourceLayers(master) {
   const names = withExtraNames(MCD_SMART_LAYER_NAMES, dollarLayerNames(master));
-  const sourceContainer = getMcdSourceContainer(master);
-  return requireMcdSmartLayers(sourceContainer, MCD_SMART_LAYER_NAMES, names);
+  const sourceContainer = getMcdSourceContainer(master, [], names);
+  return requireMcdSmartLayers(sourceContainer, [], names);
 }
 
 /**
@@ -5521,14 +5532,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         const line = document.createElement("div");
         line.className = "manager-row";
 
-        const check = document.createElement("input");
-        check.type = "checkbox";
-        check.checked = row.required;
-        check.addEventListener("change", () => {
-          row.required = check.checked;
-        });
-        line.appendChild(check);
-
         if (row.editing) {
           const input = document.createElement("input");
           input.type = "text";
@@ -5812,36 +5815,17 @@ function normalizeRequiredLayers(raw, names = APPLY_LAYER_NAMES) {
 }
 
 function applyRequiredLayers() {
-  const names = applyLayerNames();
-  return (moduleStore.applyRequiredLayers || MCD_SMART_LAYER_NAMES).filter((name) =>
-    names.includes(name),
-  );
+  // 不再要求必選圖層：PSD 裡有哪些 $ 圖層就用哪些
+  return [];
 }
 
-// 套圖用的母版檢查：只要求「必選」勾選的圖層存在
+// 套圖用的母版檢查：PSD 裡要有 $ 開頭的圖層
 function validApplyMasterOrNull(doc) {
-  if (!doc) {
-    return null;
-  }
-  const required = applyRequiredLayers();
-  const names = applyLayerNames();
-  try {
-    requireMcdSmartLayers(getMcdSourceContainer(doc, required, names), required, names);
-    return doc;
-  } catch (_error) {
-    return null;
-  }
+  return validMasterOrNull(doc);
 }
 
 function applyMasterProblem(doc) {
-  const required = applyRequiredLayers();
-  const names = applyLayerNames();
-  try {
-    requireMcdSmartLayers(getMcdSourceContainer(doc, required, names), required, names);
-    return "";
-  } catch (error) {
-    return `${error.message || error}（可按「圖層」旁的「編輯」調整必選的圖層）`;
-  }
+  return dollarMasterProblem(doc);
 }
 
 function normalizeApplyTemplate(raw) {
@@ -6943,19 +6927,13 @@ function writeGridSettings(settings) {
 const RESIZE_MODE = {
   kind: "resize",
   templates: () => moduleStore.templates,
-  required: () => MCD_SMART_LAYER_NAMES,
+  // 不檢查必要圖層：PSD 裡有哪些 $ 圖層就用哪些
+  required: () => [],
   layerNames: () => MCD_SMART_LAYER_NAMES,
   positionNames: () => MCD_POSITION_ELEMENT_NAMES,
   editableNames: () => EDITABLE_ELEMENT_NAMES,
   validMaster: validMasterOrNull,
-  masterProblem: (doc) => {
-    try {
-      requireMcdSmartLayers(getMcdSourceContainer(doc));
-      return "";
-    } catch (error) {
-      return error.message || String(error);
-    }
-  },
+  masterProblem: dollarMasterProblem,
   // 內建樣板，寬度依 MCD-SMART 比例基準換算
   initialValues: initialValuesForDocument,
   onMaster: captureReferenceIfNeeded,
