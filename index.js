@@ -2194,6 +2194,79 @@ async function openPsdAsMaster(file) {
  * 母版須含 $BG $PROD $HEAD $LOGO $SM $CTA；不修改母版、不使用工作區域。
  * 尚未命名的版型（outputDocument 為空）會略過。
  */
+// 六個元件 + 「新增文字」加的 $TEXT1…
+function resizeSourceLayers(master) {
+  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(master)];
+  const sourceContainer = getMcdSourceContainer(master);
+  return requireMcdSmartLayers(sourceContainer, MCD_SMART_LAYER_NAMES, names);
+}
+
+/**
+ * 產出一個 Resize 樣板的文件（需在 modal 內）：新文件 → 複製圖層 → 獨立樣板的文字 → 排版。
+ * 產出 PSD 與「如實預覽」都用這一份，兩者結果一定相同。
+ */
+async function buildResizeVariantDocument(master, sourceLayers, docName, canvasW, canvasH, variant) {
+  app.activeDocument = master;
+  const newDoc = await createMcdDocumentFromMaster(
+    master,
+    sourceLayers,
+    docName,
+    canvasW,
+    canvasH,
+    variant.order,
+  );
+  if (isIndependentVariant(variant) && variant.textOverrides) {
+    // 獨立樣板自己的文字只改在這份文件
+    for (const layerName of Object.keys(variant.textOverrides)) {
+      const layer = findNamedLayer(newDoc, layerName);
+      if (layer) {
+        await applyTextOverride(newDoc, layer, variant.textOverrides[layerName]);
+      }
+    }
+    app.activeDocument = newDoc;
+  }
+  await applyResizeVariantLayout(newDoc, variant, canvasW, canvasH);
+  return newDoc;
+}
+
+// 如實預覽：照產出的流程做一份暫存文件，存成 PNG 後關掉（不存 PSD）
+async function renderActualPreview(master, values, variant) {
+  const tempFolder = await localFileSystem.getTemporaryFolder();
+  const file = await tempFolder.createFile(`preview-actual-${master.id}-${Date.now()}.png`, {
+    overwrite: true,
+  });
+  const { width, height } = variantCanvasSize(values, variant);
+  await runModal(async () => {
+    await closeLeftoverPreviewDocuments();
+    const doc = await buildResizeVariantDocument(
+      master,
+      resizeSourceLayers(master),
+      `${PREVIEW_TEMP_NAME}-actual`,
+      width,
+      height,
+      variant,
+    );
+    try {
+      if (width > ACTUAL_PREVIEW_MAX_WIDTH) {
+        await doc.resizeImage(
+          ACTUAL_PREVIEW_MAX_WIDTH,
+          Math.max(Math.round((height * ACTUAL_PREVIEW_MAX_WIDTH) / width), 1),
+        );
+      }
+      await doc.saveAs.png(file, { compression: 6 }, true);
+    } finally {
+      await closeDocumentQuietly(doc);
+      if (isDocumentOpen(master)) {
+        app.activeDocument = master;
+      }
+    }
+  }, "如實預覽");
+  const buffer = await file.read({ format: formats.binary });
+  return `data:image/png;base64,${arrayBufferToBase64(buffer)}`;
+}
+
+const ACTUAL_PREVIEW_MAX_WIDTH = 1200;
+
 async function generateResizeDocuments(master, values) {
   if (!isDocumentOpen(master)) {
     throw new Error("母版已關閉，請重新開啟或上傳母版。");
@@ -2203,10 +2276,7 @@ async function generateResizeDocuments(master, values) {
     throw new Error("此模組還沒有已命名的版型，請先輸入版型名稱並按「新增」。");
   }
 
-  // 六個元件 + 「新增文字」加的 $TEXT1…
-  const names = [...MCD_SMART_LAYER_NAMES, ...extraTextNames(master)];
-  const sourceContainer = getMcdSourceContainer(master);
-  const sourceLayers = requireMcdSmartLayers(sourceContainer, MCD_SMART_LAYER_NAMES, names);
+  const sourceLayers = resizeSourceLayers(master);
 
   const folder = await localFileSystem.getFolder();
   if (!folder) {
@@ -2228,26 +2298,14 @@ async function generateResizeDocuments(master, values) {
     try {
       await runModal(
         async () => {
-          app.activeDocument = master;
-          const newDoc = await createMcdDocumentFromMaster(
+          const newDoc = await buildResizeVariantDocument(
             master,
             sourceLayers,
             docName,
             canvasW,
             canvasH,
-            job.variant.order,
+            job.variant,
           );
-          if (isIndependentVariant(job.variant) && job.variant.textOverrides) {
-            // 獨立樣板自己的文字只改在這份產出檔
-            for (const layerName of Object.keys(job.variant.textOverrides)) {
-              const layer = findNamedLayer(newDoc, layerName);
-              if (layer) {
-                await applyTextOverride(newDoc, layer, job.variant.textOverrides[layerName]);
-              }
-            }
-            app.activeDocument = newDoc;
-          }
-          await applyResizeVariantLayout(newDoc, job.variant, canvasW, canvasH);
           await saveDocumentAsPsd(newDoc, job.file);
         },
         `產製 ${docName}`,
@@ -3525,6 +3583,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function renderPreview() {
+    // 版面或設定一變，如實預覽就過期了，回到可編輯的預覽
+    state.actualPreview = null;
     stage.innerHTML = "";
     state.images = {};
     state.selection = null;
@@ -3927,6 +3987,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function updatePreviewFromFields() {
+    clearActualPreview();
     applyElementStyle(state.elementName, readFieldsAsSpec());
     updateSelectionBox();
   }
@@ -4187,6 +4248,53 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     } finally {
       textStyle.picking = false;
     }
+  }
+
+  // ----- 如實預覽：用產出的流程在 Photoshop 做一份，顯示跟產出 PSD 一模一樣的結果 -----
+
+  async function showActualPreview() {
+    const template = currentTemplate();
+    const variant = currentVariant();
+    if (!template || !variant || !isDocumentOpen(state.master)) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
+    commitFields();
+    const master = state.master;
+    setStatus("如實預覽產生中（與產出相同的流程）…");
+    let dataUrl;
+    try {
+      dataUrl = await whilePhotoshopBusy(() => renderActualPreview(master, template.values, variant));
+    } catch (error) {
+      setStatus(`如實預覽失敗：${describeModalError(error)}`);
+      await app.showAlert(`如實預覽失敗：${describeModalError(error)}`);
+      return;
+    }
+    if (!state.master || state.master.id !== master.id || currentVariant() !== variant) {
+      return;
+    }
+    clearActualPreview();
+    const img = document.createElement("img");
+    img.className = "preview-actual";
+    img.src = dataUrl;
+    img.style.zIndex = String(TEXT_EDITOR_Z_INDEX - 1);
+    img.title = "如實預覽（與產出相同），點一下回到編輯";
+    img.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      clearActualPreview();
+      setStatus("");
+    });
+    stage.appendChild(img);
+    state.actualPreview = img;
+    setStatus(`如實預覽「${variantLabel(variant)}」：與產出的 PSD 相同。點預覽圖回到編輯`);
+  }
+
+  function clearActualPreview() {
+    if (state.actualPreview && state.actualPreview.parentNode) {
+      state.actualPreview.parentNode.removeChild(state.actualPreview);
+    }
+    state.actualPreview = null;
   }
 
   // ----- 調整版面尺寸（目前選的 Resize 樣板的輸出寬高） -----
@@ -4858,6 +4966,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
           : `「${variantLabel(variant)}」改回共用：按「儲存設定值」保存`,
       );
     });
+  }
+  if (el("btn-actual-preview")) {
+    el("btn-actual-preview").addEventListener("click", showActualPreview);
   }
   if (el("btn-canvas-size")) {
     el("btn-canvas-size").addEventListener("click", openCanvasSize);
