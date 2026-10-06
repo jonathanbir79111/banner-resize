@@ -6306,6 +6306,14 @@ async function readLayerText(doc, layer) {
 
 async function writeLayerText(layer, text) {
   try {
+    // 文字一樣就不要重寫：重寫會讓整段變成第一個字的樣式（混合的字型／粗細會不見）
+    if (layer.textItem && sameText(layer.textItem.contents, text)) {
+      return;
+    }
+  } catch (_error) {
+    // 讀不到就照寫
+  }
+  try {
     if (layer.textItem) {
       // 用 DOM 改內容會保留原本的字型與樣式
       layer.textItem.contents = text;
@@ -6329,7 +6337,9 @@ async function writeLayerText(layer, text) {
 // 影像 > 全部顯現：畫布放大到容得下所有圖層（作用中文件）
 async function revealAllCanvas() {
   try {
-    await action.batchPlay([{ _obj: "revealAll" }], { synchronousExecution: true });
+    await action.batchPlay([{ _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } }], {
+      synchronousExecution: true,
+    });
   } catch (_error) {
     // 已經都在畫布內時 Photoshop 可能不給執行，略過
   }
@@ -6338,7 +6348,10 @@ async function revealAllCanvas() {
 // 打開智慧型物件的內容（.psb），回傳打開的文件
 async function openSmartObjectContents(master, layer) {
   await selectOnlyLayer(layer);
-  await action.batchPlay([{ _obj: "placedLayerEditContents" }], { synchronousExecution: true });
+  await action.batchPlay(
+    [{ _obj: "placedLayerEditContents", _options: { dialogOptions: "dontDisplay" } }],
+    { synchronousExecution: true },
+  );
   const inner = app.activeDocument;
   if (!inner || inner.id === master.id) {
     throw new Error(`${layer.name} 的內容無法開啟`);
@@ -6438,10 +6451,17 @@ async function buildTextOverridePreview(master, layerName, required, names, over
     if (!layer) {
       throw new Error(`找不到圖層 ${layerName}`);
     }
-    size = await exportLayerPreviewPng(master, layer, file, layerName, (temp, copy) =>
-      applyTextOverride(temp, copy, override),
-    );
-    app.activeDocument = master;
+    try {
+      size = await exportLayerPreviewPng(master, layer, file, layerName, (temp, copy) =>
+        applyTextOverride(temp, copy, override),
+      );
+    } finally {
+      // 不管成功或失敗，暫存文件（以及打開的智慧型物件內容）都要關掉，不留在 Photoshop
+      await closeLeftoverPreviewDocuments();
+      if (isDocumentOpen(master)) {
+        app.activeDocument = master;
+      }
+    }
   }, "擷取獨立樣板的文字");
   const buffer = await file.read({ format: formats.binary });
   return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
@@ -6599,7 +6619,9 @@ async function addTextLayerToMaster(master, required, names, text) {
 
     // 轉成智慧型物件
     await selectOnlyLayer(textLayer);
-    await action.batchPlay([{ _obj: "newPlacedLayer" }], { synchronousExecution: true });
+    await action.batchPlay([{ _obj: "newPlacedLayer", _options: { dialogOptions: "dontDisplay" } }], {
+      synchronousExecution: true,
+    });
     const placed = (master.activeLayers && master.activeLayers[0]) || textLayer;
     await action.batchPlay(
       [{ _obj: "set", _target: [{ _ref: "layer", _id: placed.id }], to: { _obj: "layer", name: newName } }],
@@ -6668,25 +6690,40 @@ function toHalfWidth(text) {
     .replace(/\u3000/g, " ");
 }
 
+function sameText(a, b) {
+  const norm = (value) => String(value == null ? "" : value).replace(/\r\n?|\n/g, "\r");
+  return norm(a) === norm(b);
+}
+
+// 只改跟目前不同的樣式：設定一次就會套到整段文字，原本混合的樣式會被統一
 async function applyTextStyle(layer, style) {
   const item = layer.textItem;
   if (!item || !item.characterStyle) {
     throw new Error("這個版本的 Photoshop 無法修改文字樣式");
   }
   const cs = item.characterStyle;
-  if (style.font) {
+  let current = {};
+  try {
+    current = textStyleOf(layer);
+  } catch (_error) {
+    // 讀不到就全部照設
+  }
+  if (style.font && style.font !== current.font) {
     cs.font = style.font;
   }
-  if (style.size > 0) {
+  if (style.size > 0 && !(Math.abs(style.size - current.size) < 0.01)) {
     cs.size = style.size;
   }
-  if (style.color) {
+  if (style.color && String(style.color).toUpperCase() !== String(current.color).toUpperCase()) {
     const color = new app.SolidColor();
     color.rgb.hexValue = style.color.replace("#", "");
     cs.color = color;
   }
-  if (style.align && constants.Justification) {
+  if (style.align && style.align !== current.align && constants.Justification) {
     item.paragraphStyle.justification = constants.Justification[style.align.toUpperCase()];
+  }
+  if (style.orientation && style.orientation === current.orientation) {
+    return; // 方向沒變
   }
   if (style.orientation === "vertical") {
     // 段落文字（固定大小的文字框）轉直排會照舊框的大小折行，每行只剩幾個字：先轉成點文字，只在換行處分行
