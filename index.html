@@ -222,6 +222,55 @@
         color: #ccc;
       }
 
+      .loading-body {
+        width: 280px;
+      }
+
+      .loading-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      .loading-spinner {
+        flex: 0 0 auto;
+        font-size: 20px;
+        color: #2680eb;
+      }
+
+      .loading-text {
+        flex: 1 1 0;
+        margin: 0;
+      }
+
+      .loading-percent {
+        flex: 0 0 auto;
+        font-size: 13px;
+        color: #ccc;
+      }
+
+      .loading-track {
+        height: 6px;
+        background: #555;
+        border-radius: 3px;
+        overflow: hidden;
+      }
+
+      .loading-bar {
+        width: 0;
+        height: 6px;
+        background: #2680eb;
+        border-radius: 3px;
+      }
+
+      .color-hint {
+        margin: -4px 0 8px 44px;
+        font-size: 11px;
+        color: #aaa;
+      }
+
       .color-swatch {
         flex: 0 0 22px;
         height: 22px;
@@ -869,9 +918,10 @@
               </div>
               <div class="style-row">
                 <span class="style-label">顏色</span>
-                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000" />
+                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)" />
                 <div class="color-swatch" data-role="text-color-swatch" title="點兩下開啟檢色器"></div>
               </div>
+              <div class="color-hint" data-role="text-color-hint"></div>
               <div class="manager-actions">
                 <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
                 <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
@@ -1413,9 +1463,10 @@
               </div>
               <div class="style-row">
                 <span class="style-label">顏色</span>
-                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000" />
+                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)" />
                 <div class="color-swatch" data-role="text-color-swatch" title="點兩下開啟檢色器"></div>
               </div>
+              <div class="color-hint" data-role="text-color-hint"></div>
               <div class="manager-actions">
                 <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
                 <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
@@ -1761,6 +1812,17 @@
             <sp-button id="btn-json-confirm-ok" variant="cta">確定</sp-button>
           </div>
         </div>
+      </div>
+    </dialog>
+
+    <dialog id="loading-dialog">
+      <div class="dialog-body loading-body">
+        <div class="loading-row">
+          <span id="loading-spinner" class="loading-spinner">◐</span>
+          <span id="loading-text" class="dialog-text loading-text"></span>
+          <span id="loading-percent" class="loading-percent">0%</span>
+        </div>
+        <div class="loading-track"><div id="loading-bar" class="loading-bar"></div></div>
       </div>
     </dialog>
 

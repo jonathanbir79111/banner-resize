@@ -2615,6 +2615,63 @@ async function showToast(message) {
   }
 }
 
+const LOADING_DELAY_MS = 250;
+const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
+
+// 讀取中視窗（轉圈＋百分比）：很快就做完的不顯示，免得閃一下
+function startLoading(message) {
+  const dialog = document.getElementById("loading-dialog");
+  const state = { shown: false, closed: false, frame: 0, percent: 0, message };
+  const render = () => {
+    document.getElementById("loading-spinner").textContent = SPINNER_FRAMES[state.frame % SPINNER_FRAMES.length];
+    document.getElementById("loading-text").textContent = state.message;
+    document.getElementById("loading-percent").textContent = `${Math.round(state.percent)}%`;
+    document.getElementById("loading-bar").style.width = `${state.percent}%`;
+  };
+  const showTimer = setTimeout(() => {
+    if (state.closed) {
+      return;
+    }
+    state.shown = true;
+    render();
+    const shown = dialog.uxpShowModal
+      ? dialog.uxpShowModal({ title: "讀取中", resize: "none" })
+      : dialog.showModal();
+    Promise.resolve(shown).catch(() => {});
+  }, LOADING_DELAY_MS);
+  const spinTimer = setInterval(() => {
+    state.frame += 1;
+    if (state.shown) {
+      render();
+    }
+  }, 120);
+  return {
+    update(percent, text) {
+      state.percent = clampNumber(percent, state.percent, 100); // 只往前不倒退
+      if (text) {
+        state.message = text;
+      }
+      if (state.shown) {
+        render();
+      }
+    },
+    async done() {
+      state.closed = true;
+      clearTimeout(showTimer);
+      clearInterval(spinTimer);
+      if (state.shown) {
+        try {
+          dialog.close();
+        } catch (_error) {
+          // 已關閉
+        }
+        // 等這個視窗收掉再開下一個
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+  };
+}
+
 function showDialog(dialog, title, options = {}) {
   const show = dialog.uxpShowModal
     ? dialog.uxpShowModal({ title, resize: "none", ...options })
@@ -4289,17 +4346,67 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 文字樣式（圖層旁的「編輯」） -----
 
-  const textStyle = { fonts: null, families: [], pickedFamily: "", align: "left", missing: "" };
+  const textStyle = { fonts: null, families: [], familiesKey: "", styles: [], pickedFamily: "", align: "left", missing: "" };
   let canvasSizeDraft = null;
 
+  // 樣式列出 100～900 全部粗細：字型有的可以選，沒有的變灰（Photoshop 做不出字型沒有的粗細）
+  // 同一個粗細有好幾種樣式（例如 Bold、Bold Italic）就各列一項
   function fillFontStyles(family, preferred) {
-    const styles = (textStyle.fonts || [])
+    const available = (textStyle.fonts || [])
       .filter((font) => font.family === family)
-      .map((font) => font.style);
-    fillPicker(el("text-font-style"), styles.length ? styles : ["—"]);
-    const index = Math.max(styles.indexOf(preferred), styles.indexOf("Regular"), 0);
-    setPickerIndex(el("text-font-style"), index);
-    return styles;
+      .map((font) => font.style)
+      .sort((a, b) => fontWeightOf(a) - fontWeightOf(b) || a.localeCompare(b));
+    const styles = [];
+    const weights = [];
+    const labels = [];
+    if (available.length) {
+      FONT_WEIGHTS.forEach(([weight, name]) => {
+        const matches = available.filter((style) => fontWeightOf(style) === weight);
+        if (matches.length) {
+          matches.forEach((style) => {
+            styles.push(style);
+            weights.push(weight);
+            labels.push(`${weight}　${style}`);
+          });
+        } else {
+          styles.push(null);
+          weights.push(weight);
+          labels.push(`${weight}　${name}（此字型沒有）`);
+        }
+      });
+    }
+    textStyle.styles = styles;
+    textStyle.styleWeights = weights;
+    textStyle.availableStyles = available;
+    const picker = el("text-font-style");
+    fillPicker(picker, labels.length ? labels : ["—"]);
+    picker.querySelectorAll("sp-menu-item").forEach((item, i) => {
+      if (styles[i] === null) {
+        item.setAttribute("disabled", "");
+      }
+    });
+    let index = styles.indexOf(preferred);
+    if (index < 0) {
+      index = styles.indexOf("Regular");
+    }
+    if (index < 0) {
+      index = Math.max(styles.findIndex((style) => style !== null), 0);
+    }
+    setPickerIndex(picker, index);
+    return available;
+  }
+
+  // 選到沒有的粗細（變灰的項目）時，改用字型裡最接近的粗細
+  function pickedFontStyle() {
+    const index = el("text-font-style").selectedIndex;
+    const style = textStyle.styles[index];
+    if (style || !textStyle.availableStyles || !textStyle.availableStyles.length) {
+      return style || "";
+    }
+    const target = textStyle.styleWeights[index] || 400;
+    return textStyle.availableStyles.reduce((best, s) =>
+      Math.abs(fontWeightOf(s) - target) < Math.abs(fontWeightOf(best) - target) ? s : best,
+    );
   }
 
   function renderAlignButtons() {
@@ -4312,8 +4419,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function updateColorSwatch() {
     const value = el("text-color").value.trim();
-    const hex = /^#?[0-9a-f]{6}$/i.test(value) ? `#${value.replace("#", "")}` : "transparent";
-    el("text-color-swatch").style.background = hex;
+    const parsed = parseColor(value);
+    el("text-color-swatch").style.background = parsed ? parsed.hex : "transparent";
+    let hint = "";
+    if (!parsed) {
+      hint = value ? "看不懂這個顏色，可輸入 #RGB、#RRGGBB、rgb()、rgba()、hsl()、hsla()、hsb()" : "";
+    } else if (parsed.alpha < 1) {
+      hint = `會套用 ${parsed.hex}（Photoshop 文字顏色沒有透明度，透明度會忽略）`;
+    } else if (parsed.hex.toLowerCase() !== value.toLowerCase()) {
+      hint = `會套用 ${parsed.hex}`;
+    }
+    el("text-color-hint").textContent = hint;
   }
 
   // 色塊點兩下開 Photoshop 檢色器
@@ -4327,7 +4443,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     textStyle.swatchClick = 0;
     textStyle.picking = true;
     try {
-      const picked = await pickColorInPhotoshop(el("text-color").value.trim());
+      const picked = await whilePhotoshopBusy(() => pickColorInPhotoshop(el("text-color").value.trim()));
       if (picked) {
         el("text-color").value = picked;
         updateColorSwatch();
@@ -4397,17 +4513,24 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     commitFields();
     const master = state.master;
     setStatus(`讀取 ${name} 的文字樣式中…`);
+    const loading = startLoading("讀取文字樣式…");
     let style;
     try {
       style = await whilePhotoshopBusy(() =>
         readTextStyle(master, name, mode.required(), layerNames()),
       );
+      loading.update(10, "載入字型清單…");
+      // 字型清單只讀一次（兩個分頁共用），第一次讀會比較久
+      textStyle.fonts = textStyle.fonts || (await loadFonts((ratio) => loading.update(10 + ratio * 80)));
+      loading.update(90, "建立選單…");
     } catch (error) {
+      await loading.done();
       setStatus(`無法讀取文字樣式：${describeModalError(error)}`);
       await app.showAlert(`無法讀取文字樣式：${describeModalError(error)}`);
       return;
     }
     if (!style) {
+      await loading.done();
       setStatus(`${name} 沒有文字`);
       await app.showAlert(`${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`);
       return;
@@ -4421,14 +4544,21 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
 
     // 字型清單：目前字型找不到時（缺字型）放在第一項，代表維持不變
-    textStyle.fonts = textStyle.fonts || listFonts();
-    const families = [...new Set(textStyle.fonts.map((font) => font.family))].sort((a, b) =>
-      a.localeCompare(b),
-    );
+    if (!textStyle.sortedFamilies) {
+      textStyle.sortedFamilies = [...new Set(textStyle.fonts.map((font) => font.family))].sort((a, b) =>
+        a.localeCompare(b),
+      );
+    }
+    const families = textStyle.sortedFamilies;
     const current = textStyle.fonts.find((font) => font.postScriptName === style.font) || null;
     textStyle.missing = current ? "" : style.font;
     textStyle.families = textStyle.missing ? [`（目前字型）${style.font || "未知"}`, ...families] : families;
-    fillPicker(el("text-font-family"), textStyle.families);
+    // 字型很多時重建選單很慢：清單沒變就沿用
+    const familiesKey = textStyle.missing ? `missing:${textStyle.missing}` : "all";
+    if (textStyle.familiesKey !== familiesKey) {
+      fillPicker(el("text-font-family"), textStyle.families);
+      textStyle.familiesKey = familiesKey;
+    }
     const familyIndex = current ? textStyle.families.indexOf(current.family) : 0;
     setPickerIndex(el("text-font-family"), Math.max(familyIndex, 0));
     textStyle.pickedFamily = current ? current.family : "";
@@ -4438,6 +4568,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     textStyle.align = style.align;
     renderAlignButtons();
     updateColorSwatch();
+    loading.update(100);
+    await loading.done();
     setStatus(`編輯 ${name} 的文字樣式`);
 
     if (!(await showDialog(el("text-style-dialog"), `文字樣式：${name}`))) {
@@ -4445,23 +4577,23 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const size = parseFloat(el("text-font-size").value);
-    const color = el("text-color").value.trim();
+    const color = parseColor(el("text-color").value);
     if (!(size > 0)) {
       await app.showAlert("請輸入大於 0 的文字大小（pt）。");
       return;
     }
-    if (!/^#?[0-9a-f]{6}$/i.test(color)) {
-      await app.showAlert("顏色請輸入 6 位數色碼，例如 #000000。");
+    if (!color) {
+      await app.showAlert("看不懂這個顏色，例如 #000000、#000、rgb(0, 0, 0)、rgba(0, 0, 0, 1)、hsl(0, 0%, 0%)。");
       return;
     }
     const familyIndex2 = el("text-font-family").selectedIndex;
-    const styleName = (el("text-font-style").querySelectorAll("sp-menu-item")[el("text-font-style").selectedIndex] || {}).textContent;
+    const styleName = pickedFontStyle();
     const family = textStyle.families[familyIndex2];
     const picked = textStyle.fonts.find((font) => font.family === family && font.style === styleName);
     const next = {
       font: picked ? picked.postScriptName : "",
       size,
-      color: `#${color.replace("#", "").toUpperCase()}`,
+      color: color.hex,
       align: textStyle.align,
     };
     if (variant) {
@@ -6799,10 +6931,11 @@ async function writeTextStyle(master, layerName, required, names, style) {
 }
 
 function hexToRgb(hex) {
-  const value = String(hex || "").replace("#", "");
-  if (!/^[0-9a-f]{6}$/i.test(value)) {
+  const parsed = parseColor(hex);
+  if (!parsed) {
     return null;
   }
+  const value = parsed.hex.slice(1);
   return {
     red: parseInt(value.slice(0, 2), 16),
     green: parseInt(value.slice(2, 4), 16),
@@ -6834,12 +6967,45 @@ async function pickColorInPhotoshop(hex) {
       {},
     );
     const first = result && result[0];
-    const color = first && (first.RGBFloatColor || first.color);
-    if (color && Number.isFinite(Number(color.red))) {
-      picked = rgbToHex(color.red, color.grain, color.blue);
-    }
+    picked = pickerColorToHex(first && (first.RGBFloatColor || first.color));
   }, "選擇顏色");
   return picked;
+}
+
+// 檢色器回傳的顏色依使用者選的模式不同（RGB／HSB／Lab／CMYK／灰階），統一轉成 #RRGGBB
+function pickerColorToHex(color) {
+  if (!color) {
+    return null;
+  }
+  const n = (value) => Number(value && typeof value === "object" ? value._value : value);
+  const kind = String(color._obj || "").toLowerCase();
+  if (Number.isFinite(n(color.red))) {
+    return rgbToHex(n(color.red), n(color.grain !== undefined ? color.grain : color.green), n(color.blue));
+  }
+  if (kind.startsWith("hsb") || Number.isFinite(n(color.brightness))) {
+    const rgb = hsbToRgb((((n(color.hue) % 360) + 360) % 360) / 360, n(color.saturation) / 100, n(color.brightness) / 100);
+    return rgbToHex(rgb[0], rgb[1], rgb[2]);
+  }
+  try {
+    const solid = new app.SolidColor();
+    if (Number.isFinite(n(color.luminance))) {
+      solid.lab.l = n(color.luminance);
+      solid.lab.a = n(color.a);
+      solid.lab.b = n(color.b);
+    } else if (Number.isFinite(n(color.cyan))) {
+      solid.cmyk.cyan = n(color.cyan);
+      solid.cmyk.magenta = n(color.magenta);
+      solid.cmyk.yellow = n(color.yellowColor);
+      solid.cmyk.black = n(color.black);
+    } else if (Number.isFinite(n(color.gray))) {
+      solid.gray.gray = n(color.gray);
+    } else {
+      return null;
+    }
+    return `#${String(solid.rgb.hexValue).toUpperCase()}`;
+  } catch (_error) {
+    return null;
+  }
 }
 
 // 文字與樣式一起改、只存一次（轉向用）
@@ -6857,22 +7023,211 @@ async function writeTextsAndStyle(master, layerName, required, names, values, st
   }, "轉向");
 }
 
-function listFonts() {
+// 字型清單：一次用 batchPlay 讀完（很快）；不行才逐一讀 app.fonts（每個屬性都要跟 Photoshop 來回，幾千個字型會很久）
+let fontListPromise = null;
+
+function loadFonts(onProgress) {
+  if (!fontListPromise) {
+    fontListPromise = readFontList(onProgress).catch((error) => {
+      fontListPromise = null;
+      throw error;
+    });
+  } else if (onProgress) {
+    fontListPromise.then(() => onProgress(1));
+  }
+  return fontListPromise;
+}
+
+async function readFontList(onProgress) {
+  const report = (ratio) => {
+    if (onProgress) {
+      onProgress(ratio);
+    }
+  };
+  try {
+    const fonts = await readFontListByBatchPlay();
+    if (fonts.length) {
+      report(1);
+      return fonts;
+    }
+  } catch (_error) {
+    // 改逐一讀
+  }
+  return readFontListByDom(report);
+}
+
+async function readFontListByBatchPlay() {
+  const result = await action.batchPlay(
+    [
+      {
+        _obj: "get",
+        _target: [{ _property: "fontList" }, { _ref: "application", _enum: "ordinal", _value: "targetEnum" }],
+      },
+    ],
+    {},
+  );
+  const list = result && result[0] && result[0].fontList;
+  if (!list || !Array.isArray(list.fontPostScriptName)) {
+    return [];
+  }
+  const names = list.fontName || [];
+  const styles = list.fontStyleName || [];
+  const families = list.fontFamilyName || [];
+  return list.fontPostScriptName.map((postScriptName, i) => {
+    const style = String(styles[i] || "Regular");
+    let family = String(families[i] || "");
+    if (!family) {
+      // 沒有字族名稱：從完整名稱去掉樣式（例如「Arial Bold」→「Arial」）
+      const name = String(names[i] || postScriptName || "");
+      family = name.endsWith(` ${style}`) ? name.slice(0, -style.length - 1) : name;
+    }
+    return { family, style, postScriptName: String(postScriptName || "") };
+  });
+}
+
+const FONT_READ_CHUNK = 100;
+
+async function readFontListByDom(report) {
   const out = [];
   try {
     const fonts = app.fonts || [];
-    for (let i = 0; i < fonts.length; i++) {
+    const total = fonts.length;
+    for (let i = 0; i < total; i++) {
       const font = fonts[i];
       out.push({
         family: String(font.family || font.name || ""),
         style: String(font.style || "Regular"),
         postScriptName: String(font.postScriptName || font.name || ""),
       });
+      if ((i + 1) % FONT_READ_CHUNK === 0) {
+        report((i + 1) / total);
+        await new Promise((resolve) => setTimeout(resolve, 0)); // 讓畫面更新進度
+      }
     }
   } catch (_error) {
     // 讀不到字型清單：只能沿用目前字型
   }
+  report(1);
   return out;
+}
+
+const FONT_WEIGHTS = [
+  [100, "Thin"],
+  [200, "ExtraLight"],
+  [300, "Light"],
+  [400, "Regular"],
+  [500, "Medium"],
+  [600, "SemiBold"],
+  [700, "Bold"],
+  [800, "ExtraBold"],
+  [900, "Black"],
+];
+
+// 樣式名稱 → 粗細數字（100～900，跟 CSS font-weight 一樣）
+function fontWeightOf(style) {
+  const value = String(style || "").toLowerCase().replace(/[\s_-]/g, "");
+  const w = value.match(/(?:^|[^a-z])w([1-9])(?![0-9])/);
+  if (w) {
+    return Number(w[1]) * 100; // 日文字型的 W3、W6…
+  }
+  const rules = [
+    [/extralight|ultralight/, 200],
+    [/extrabold|ultrabold/, 800],
+    [/semibold|demibold|demi/, 600],
+    [/thin|hairline/, 100],
+    [/light/, 300],
+    [/medium/, 500],
+    [/black|heavy/, 900],
+    [/bold/, 700],
+  ];
+  const hit = rules.find(([pattern]) => pattern.test(value));
+  return hit ? hit[1] : 400;
+}
+
+// ---------- 顏色字串（#hex、rgb()、rgba()、hsl()、hsla()、hsb()、顏色名稱） ----------
+
+const NAMED_COLORS = {
+  black: "000000", white: "FFFFFF", red: "FF0000", green: "008000", lime: "00FF00", blue: "0000FF",
+  yellow: "FFFF00", cyan: "00FFFF", aqua: "00FFFF", magenta: "FF00FF", fuchsia: "FF00FF",
+  gray: "808080", grey: "808080", silver: "C0C0C0", maroon: "800000", olive: "808000",
+  navy: "000080", purple: "800080", teal: "008080", orange: "FFA500", pink: "FFC0CB",
+  brown: "A52A2A", gold: "FFD700",
+};
+
+// 回傳 { hex: "#RRGGBB", alpha: 0～1 }；看不懂回傳 null
+function parseColor(input) {
+  const text = String(input || "").trim().toLowerCase();
+  if (!text) {
+    return null;
+  }
+  if (NAMED_COLORS[text]) {
+    return { hex: `#${NAMED_COLORS[text]}`, alpha: 1 };
+  }
+  const hexMatch = text.match(/^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+  if (hexMatch) {
+    let digits = hexMatch[1];
+    if (digits.length <= 4) {
+      digits = digits.split("").map((ch) => ch + ch).join("");
+    }
+    const alpha = digits.length === 8 ? parseInt(digits.slice(6), 16) / 255 : 1;
+    return { hex: `#${digits.slice(0, 6).toUpperCase()}`, alpha };
+  }
+  const fn = text.match(/^(rgba?|hsla?|hsb|hsv)\s*\(([^)]*)\)$/);
+  if (!fn) {
+    return null;
+  }
+  const parts = fn[2].split(/[\s,/]+/).filter(Boolean);
+  if (parts.length < 3 || parts.length > 4) {
+    return null;
+  }
+  const num = (part) => parseFloat(part);
+  if (parts.some((part) => !Number.isFinite(num(part)))) {
+    return null;
+  }
+  const alphaOf = (part) => {
+    if (part === undefined) {
+      return 1;
+    }
+    const n = part.endsWith("%") ? num(part) / 100 : num(part);
+    return clampNumber(n, 0, 1);
+  };
+  const percent = (part, scale) => (part.endsWith("%") ? (num(part) / 100) * scale : num(part));
+  const alpha = alphaOf(parts[3]);
+  if (fn[1].startsWith("rgb")) {
+    const [r, g, b] = parts.slice(0, 3).map((part) => percent(part, 255));
+    return { hex: rgbToHex(r, g, b), alpha };
+  }
+  const hue = (((num(parts[0]) % 360) + 360) % 360) / 360;
+  const sat = clampNumber(parts[1].endsWith("%") ? num(parts[1]) / 100 : num(parts[1]) > 1 ? num(parts[1]) / 100 : num(parts[1]), 0, 1);
+  const third = clampNumber(parts[2].endsWith("%") ? num(parts[2]) / 100 : num(parts[2]) > 1 ? num(parts[2]) / 100 : num(parts[2]), 0, 1);
+  const rgb = fn[1].startsWith("hsl") ? hslToRgb(hue, sat, third) : hsbToRgb(hue, sat, third);
+  return { hex: rgbToHex(rgb[0], rgb[1], rgb[2]), alpha };
+}
+
+function hslToRgb(h, s, l) {
+  if (s === 0) {
+    return [l * 255, l * 255, l * 255];
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t) => {
+    const x = (t + 1) % 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  return [channel(h + 1 / 3) * 255, channel(h) * 255, channel(h - 1 / 3) * 255];
+}
+
+function hsbToRgb(h, s, v) {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  const [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+  return [r * 255, g * 255, b * 255];
 }
 
 // 刪除「新增文字」加的文字區塊並存檔
@@ -7268,3 +7623,8 @@ btnGenBanner1 &&
       await app.showAlert(`Banner 產製失敗：${error.message || error}`);
     }
   });
+
+// 面板開好後先在背景讀字型清單，第一次按「編輯」就不用等
+setTimeout(() => {
+  loadFonts().catch(() => {});
+}, 2000);
