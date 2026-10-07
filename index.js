@@ -3306,9 +3306,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         ? [variantLabel(variants[0]), ...state.sets.map((set) => set.name)]
         : []
       : variants.map(variantLabel);
-    if (isApply) {
-      el("btn-sync-sizes").style.display = state.sets.length ? "" : "none";
-    }
     fillPicker(variantPicker, labels);
     if (labels.length) {
       setPickerIndex(variantPicker, isApply ? state.outputIndex : state.variantIndex);
@@ -3621,12 +3618,16 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
    * 套到預設與其他所有套圖。
    */
   async function syncApplyLayers(template, source) {
-    if (!(await showDialog(el("sync-dialog"), "同步圖層"))) {
-      return;
-    }
     commitFields();
     for (const set of state.sets) {
       applyExtras.variantForSet(set);
+    }
+    if (!template.values.variants.some((variant) => variant !== source)) {
+      await app.showAlert("目前沒有其他套圖可以同步。請先在「圖檔 src」選擇放有套圖圖檔的資料夾。");
+      return;
+    }
+    if (!(await showDialog(el("sync-dialog"), "同步圖層"))) {
+      return;
     }
     for (const variant of template.values.variants) {
       if (variant === source) {
