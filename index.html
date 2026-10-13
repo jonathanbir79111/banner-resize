@@ -333,6 +333,35 @@
         white-space: normal;
       }
 
+      .field-unit {
+        flex: 0 0 auto;
+        color: white;
+      }
+
+      .preview-outline-dot {
+        position: absolute;
+        width: 2px;
+        height: 2px;
+        background: #0d66d0;
+        pointer-events: none;
+      }
+
+      /* 旋轉控制點：拖曳轉動，按住 Shift 每 15 度跳一格 */
+      .preview-rotate {
+        position: absolute;
+        display: none;
+        width: 20px;
+        height: 20px;
+        line-height: 19px;
+        text-align: center;
+        font-size: 15px;
+        color: white;
+        background: #0d66d0;
+        border-radius: 10px;
+        cursor: grab;
+        pointer-events: auto;
+      }
+
       .preview-selection {
         position: absolute;
         display: none;
@@ -1173,6 +1202,32 @@
               </div>
             </div>
             <div class="settings-field-row">
+              <label>角度</label>
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-rotation"
+                placeholder="0"
+              />
+              <span class="field-unit">度</span>
+              <div class="stepper">
+                <button
+                  type="button"
+                  data-step-target="rotation"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="rotation"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+            <div class="settings-field-row">
               <label>層級</label>
               <div class="layer-buttons">
                 <button type="button" class="small-btn" data-layer-move="front">
@@ -1712,6 +1767,32 @@
                 <button
                   type="button"
                   data-step-target="heightPercent"
+                  data-step-dir="down"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+            <div class="settings-field-row">
+              <label>角度</label>
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-rotation"
+                placeholder="0"
+              />
+              <span class="field-unit">度</span>
+              <div class="stepper">
+                <button
+                  type="button"
+                  data-step-target="rotation"
+                  data-step-dir="up"
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  data-step-target="rotation"
                   data-step-dir="down"
                 >
                   ▼

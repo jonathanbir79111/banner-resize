@@ -1127,7 +1127,22 @@ const MCD_POSITION_ELEMENT_NAMES = ["$LOGO", "$HEAD", "$PROD", "$SM", "$CTA"];
 const EDITABLE_ELEMENT_NAMES = [...MCD_POSITION_ELEMENT_NAMES, "$BG"];
 const SPEC_KEYS = ["leftPercent", "topPercent", "widthPercent"];
 // 面板欄位：高度% 可留空（不限高度，高度隨圖層比例）
-const FIELD_KEYS = [...SPEC_KEYS, "heightPercent"];
+const FIELD_KEYS = [...SPEC_KEYS, "heightPercent", "rotation"];
+const ROTATION_STEP = 1;
+const ROTATION_SNAP = 15;
+const ROTATE_HANDLE_SIZE = 20;
+const ROTATE_HANDLE_GAP = 8;
+
+// 角度（度，順時針為正，跟 Photoshop 一樣）整理成 -180～180
+function normalizeAngle(deg) {
+  let n = Number(deg) % 360;
+  if (n > 180) {
+    n -= 360;
+  } else if (n <= -180) {
+    n += 360;
+  }
+  return Math.round(n * 100) / 100 || 0;
+}
 const ALIGN_X = { left: 0, center: 0.5, right: 1 };
 const ALIGN_Y = { top: 0, middle: 0.5, bottom: 1 };
 
@@ -1296,6 +1311,10 @@ function normalizeFrameOptions(src, out) {
   // 套圖：換上的圖在框內置中
   if (src.centered === true) {
     out.centered = true;
+  }
+  const rotation = normalizeAngle(src.rotation);
+  if (Number.isFinite(rotation) && rotation) {
+    out.rotation = rotation;
   }
   return out;
 }
@@ -1932,6 +1951,28 @@ async function layoutInFrame(layer, frame, spec, name) {
     layer,
     frame.left + (canvasW * rect.left) / 100 - fitted.left,
     frame.top + (canvasH * rect.top) / 100 - fitted.top,
+  );
+  // 最後以圖層中心旋轉（跟預覽一樣）
+  if (spec.rotation) {
+    await rotateLayer(layer, spec.rotation);
+  }
+}
+
+async function rotateLayer(layer, degrees) {
+  await prepareLayerForTransform(layer);
+  await action.batchPlay(
+    [
+      {
+        _obj: "transform",
+        _target: [{ _ref: "layer", _id: layer.id }],
+        freeTransformCenterState: {
+          _enum: "quadCenterState",
+          _value: "QCSAverage",
+        },
+        angle: { _unit: "angleUnit", _value: degrees },
+      },
+    ],
+    { synchronousExecution: true },
   );
 }
 
@@ -2877,6 +2918,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     topPercent: el("field-topPercent"),
     widthPercent: el("field-widthPercent"),
     heightPercent: el("field-heightPercent"),
+    rotation: el("field-rotation"),
   };
   const stage = el("preview-stage");
   const templatePicker = el("template-picker");
@@ -2893,6 +2935,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     previewCache: null,
     // 獨立樣板自己的文字預覽圖（key：母版 id + 圖層 + 設定）
     overrideImages: {},
+    rotatedImages: {},
     drag: null,
     images: {},
     selection: null,
@@ -3030,6 +3073,53 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         setStatus(`獨立樣板的文字預覽失敗：${describeModalError(error)}`);
       });
     return null;
+  }
+
+  // 旋轉後的預覽圖：有就回傳；沒有就排程請 Photoshop 產生（拖曳中先不產生）
+  function rotatedImage(name, rotation) {
+    if (!rotation || !isDocumentOpen(state.master)) {
+      return null;
+    }
+    if (isApply && applyExtras && applyExtras.replacementFor(name)) {
+      return null; // 換上的套圖圖檔不在 PSD 裡，預覽不轉（產出時會轉）
+    }
+    const override = textOverrideOf(verticalVariant(), name, false);
+    const key = `${state.master.id}|${name}|${rotation}|${JSON.stringify(override || null)}`;
+    const hit = state.rotatedImages[key];
+    if (hit) {
+      return hit.image || null;
+    }
+    if (!state.drag) {
+      scheduleRotatedImage(name, rotation, override, key);
+    }
+    return null;
+  }
+
+  function scheduleRotatedImage(name, rotation, override, key) {
+    state.rotateTimers = state.rotateTimers || {};
+    clearTimeout(state.rotateTimers[name]);
+    state.rotateTimers[name] = setTimeout(() => {
+      if (state.rotatedImages[key]) {
+        return;
+      }
+      state.rotatedImages[key] = { pending: true };
+      const master = state.master;
+      setStatus(`產生 ${name} 旋轉 ${rotation} 度的預覽中…`);
+      whilePhotoshopBusy(() =>
+        buildRotatedPreview(master, name, mode.required(), layerNames(), rotation, override),
+      )
+        .then((image) => {
+          state.rotatedImages[key] = { image: { ...image, rotation } };
+          setStatus("");
+          if (state.master && state.master.id === master.id) {
+            applyElementStyle(name, specForPreview(name));
+          }
+        })
+        .catch((error) => {
+          state.rotatedImages[key] = { image: null };
+          setStatus(`旋轉預覽失敗：${describeModalError(error)}`);
+        });
+    }, 300);
   }
 
   function isDraftSelected() {
@@ -3174,6 +3264,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (state.elementName !== "$BG" && Number.isFinite(h) && h > 0) {
       out.heightPercent = h;
     }
+    // 背景要鋪滿，不旋轉
+    const r = normalizeAngle(parseFloat(fields.rotation.value));
+    if (state.elementName !== "$BG" && Number.isFinite(r) && r) {
+      out.rotation = r;
+    }
     if (spec.centered) {
       out.centered = true;
     }
@@ -3187,6 +3282,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     fields.heightPercent.value = hasFrameHeight(spec)
       ? roundTo(spec.heightPercent, 2)
       : "";
+    fields.rotation.value = String(normalizeAngle(spec.rotation || 0));
+    fields.rotation.disabled = state.elementName === "$BG";
   }
 
   // $BG 欄位顯示實際滿版後的位置與大小（舊資料若會露白邊，存檔時一併修正）
@@ -3250,6 +3347,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const target = variant.elements[state.elementName];
     delete target.heightPercent;
+    delete target.rotation;
     delete target.alignX;
     delete target.alignY;
     Object.assign(target, next);
@@ -3261,6 +3359,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function stepField(key, direction) {
     const input = fields[key];
+    if (key === "rotation") {
+      const current = parseFloat(input.value);
+      input.value = String(normalizeAngle((Number.isFinite(current) ? current : 0) + direction * ROTATION_STEP));
+      return;
+    }
     const current = parseFloat(input.value);
     let base = Number.isFinite(current) ? current : 0;
     if (key === "heightPercent" && !Number.isFinite(current)) {
@@ -3366,9 +3469,37 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const rect = fitInFrame(name, spec, heightRatio(name));
-    img.style.left = `${rect.left}%`;
-    img.style.top = `${rect.top}%`;
-    img.style.width = `${rect.width}%`;
+    const base = layerImage(name);
+    // 新角度的圖還沒好之前，先沿用上一張轉好的圖（依它自己的角度擺），不要跳回沒轉的樣子
+    const exact = rotatedImage(name, spec.rotation);
+    if (exact) {
+      img._lastTurned = exact;
+    }
+    const turned = exact || (spec.rotation && img._lastTurned) || null;
+    const source = turned || base;
+    if (source && img._dataUrl !== source.dataUrl) {
+      img._dataUrl = source.dataUrl;
+      img.src = source.dataUrl;
+    }
+    if (!turned) {
+      img.style.left = `${rect.left}%`;
+      img.style.top = `${rect.top}%`;
+      img.style.width = `${rect.width}%`;
+      return;
+    }
+    // 旋轉後的圖比原本大：以圖層中心為準，寬度＝轉完的外框寬
+    const stageW = Math.max(stage.clientWidth, 1);
+    const stageH = Math.max(stage.clientHeight, 1);
+    const rad = (turned.rotation * Math.PI) / 180;
+    const w = (rect.width / 100) * stageW;
+    const h = (rect.height / 100) * stageH;
+    const outerW = Math.abs(w * Math.cos(rad)) + Math.abs(h * Math.sin(rad));
+    const outerH = turned.width ? (outerW * turned.height) / turned.width : h;
+    const cx = (rect.left / 100) * stageW + w / 2;
+    const cy = (rect.top / 100) * stageH + h / 2;
+    img.style.left = `${((cx - outerW / 2) / stageW) * 100}%`;
+    img.style.top = `${((cy - outerH / 2) / stageH) * 100}%`;
+    img.style.width = `${(outerW / stageW) * 100}%`;
   }
 
   function frameHeightPercent(name, spec) {
@@ -3390,7 +3521,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (sel.remove) {
       sel.remove.style.display = deletable ? "block" : "none";
     }
+    const rotatable = !hidden && state.elementName !== "$BG";
+    if (sel.rotate) {
+      sel.rotate.style.display = rotatable ? "block" : "none";
+    }
     if (hidden) {
+      drawRotatedOutline(sel, []);
       return;
     }
     const spec = readFieldsAsSpec();
@@ -3401,20 +3537,49 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     sel.box.style.width = `${spec.widthPercent}%`;
     sel.box.style.height = `${heightPercent}%`;
 
-    // 控制點夾在預覽範圍內：$BG 等超出畫布的圖層也拉得到角落
+    // 有角度時框和控制點一起繞圖層中心轉
     const stageW = stage.clientWidth;
     const stageH = stage.clientHeight;
+    const pivot = rotationPivot(state.elementName, spec);
+    const angle = spec.rotation || 0;
+    const turn = (x, y) => rotatePoint(x, y, pivot.x, pivot.y, angle);
+    // UXP 不支援 CSS 旋轉：有角度時框線改用小點畫出轉過的四邊
+    sel.box.style.display = angle ? "none" : "block";
+    drawRotatedOutline(
+      sel,
+      angle
+        ? [
+            [spec.leftPercent, spec.topPercent],
+            [spec.leftPercent + spec.widthPercent, spec.topPercent],
+            [spec.leftPercent + spec.widthPercent, spec.topPercent + heightPercent],
+            [spec.leftPercent, spec.topPercent + heightPercent],
+          ].map(([x, y]) => turn((x / 100) * stageW, (y / 100) * stageH))
+        : [],
+    );
+
+    // 控制點夾在預覽範圍內：$BG 等超出畫布的圖層也拉得到角落
     const half = HANDLE_SIZE / 2;
     sel.handles.forEach(({ corner, node }) => {
       const fx = corner.includes("e") ? 1 : corner.includes("w") ? 0 : 0.5;
       const fy = corner.includes("s") ? 1 : corner.includes("n") ? 0 : 0.5;
       const xPercent = spec.leftPercent + spec.widthPercent * fx;
       const yPercent = spec.topPercent + heightPercent * fy;
-      const x = clampNumber((xPercent / 100) * stageW, half, stageW - half);
-      const y = clampNumber((yPercent / 100) * stageH, half, stageH - half);
+      const point = turn((xPercent / 100) * stageW, (yPercent / 100) * stageH);
+      const x = clampNumber(point.x, half, stageW - half);
+      const y = clampNumber(point.y, half, stageH - half);
       node.style.left = `${x - half}px`;
       node.style.top = `${y - half}px`;
     });
+    if (rotatable && sel.rotate) {
+      // 放在右下角控制點的外側斜下方，跟著角度轉
+      const size = ROTATE_HANDLE_SIZE;
+      const offset = ROTATE_HANDLE_GAP + size / 2;
+      const cornerX = ((spec.leftPercent + spec.widthPercent) / 100) * stageW;
+      const cornerY = ((spec.topPercent + heightPercent) / 100) * stageH;
+      const point = turn(cornerX + offset, cornerY + offset);
+      sel.rotate.style.left = `${clampNumber(point.x - size / 2, 0, stageW - size)}px`;
+      sel.rotate.style.top = `${clampNumber(point.y - size / 2, 0, stageH - size)}px`;
+    }
     if (deletable && sel.remove) {
       // 放在右上角控制點的右上方，不擋到縮放
       const size = DELETE_BUTTON_SIZE;
@@ -3423,6 +3588,65 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       sel.remove.style.left = `${clampNumber(right + 4, 0, stageW - size)}px`;
       sel.remove.style.top = `${clampNumber(top - size - 4, 0, stageH - size)}px`;
     }
+  }
+
+  const OUTLINE_DOT_GAP = 6;
+  const OUTLINE_MAX_DOTS = 400;
+
+  function drawRotatedOutline(sel, corners) {
+    const points = [];
+    corners.forEach((from, i) => {
+      const to = corners[(i + 1) % corners.length];
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      const steps = Math.max(1, Math.floor(length / OUTLINE_DOT_GAP));
+      for (let k = 0; k < steps; k++) {
+        points.push({ x: from.x + ((to.x - from.x) * k) / steps, y: from.y + ((to.y - from.y) * k) / steps });
+      }
+    });
+    const shown = points.slice(0, OUTLINE_MAX_DOTS);
+    sel.dots = sel.dots || [];
+    while (sel.dots.length < shown.length) {
+      const dot = document.createElement("div");
+      dot.className = "preview-outline-dot";
+      dot.style.zIndex = sel.box.style.zIndex;
+      stage.appendChild(dot);
+      sel.dots.push(dot);
+    }
+    sel.dots.forEach((dot, i) => {
+      const point = shown[i];
+      if (!point) {
+        dot.style.display = "none";
+        return;
+      }
+      dot.style.display = "block";
+      dot.style.left = `${point.x - 1}px`;
+      dot.style.top = `${point.y - 1}px`;
+    });
+  }
+
+  // 旋轉中心＝圖層中心（預覽座標，px）
+  function rotationPivot(name, spec) {
+    const ratio = heightRatio(name);
+    const rect = ratio
+      ? fitInFrame(name, spec, ratio)
+      : { left: spec.leftPercent, top: spec.topPercent, width: spec.widthPercent, height: 0 };
+    return {
+      x: ((rect.left + rect.width / 2) / 100) * stage.clientWidth,
+      y: ((rect.top + rect.height / 2) / 100) * stage.clientHeight,
+    };
+  }
+
+  function rotatePoint(x, y, cx, cy, degrees) {
+    if (!degrees) {
+      return { x, y };
+    }
+    const rad = (degrees * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return {
+      x: cx + (x - cx) * cos - (y - cy) * sin,
+      y: cy + (x - cx) * sin + (y - cy) * cos,
+    };
   }
 
   function updateHighlight() {
@@ -3478,7 +3702,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       deleteTextBlock();
     });
     stage.appendChild(remove);
-    return { box, handles, remove };
+    // 右下角外側的 ↻：拖曳旋轉（順時針、逆時針都可以）
+    const rotate = document.createElement("div");
+    rotate.className = "preview-rotate";
+    rotate.textContent = "↻";
+    rotate.title = "拖曳旋轉（按住 Shift 每 15 度）";
+    rotate.style.zIndex = String(zIndex + 2);
+    rotate.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+      startRotate(event);
+    });
+    stage.appendChild(rotate);
+    return { box, handles, remove, rotate };
   }
 
   // ----- 圖層前後順序 -----
@@ -3678,7 +3913,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const img = document.createElement("img");
       img.className = "preview-layer";
       img.setAttribute("data-layer", name);
-      img.src = layerImage(name).dataUrl;
       img.style.zIndex = String(zIndexFor(name, index));
       stage.appendChild(img);
       state.images[name] = img;
@@ -4148,6 +4382,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     refreshExtraNames();
     if (force) {
       state.overrideImages = {};
+      state.rotatedImages = {};
     }
     const master = state.master;
     if (!isDocumentOpen(master)) {
@@ -4218,6 +4453,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     beginDrag("resize", corner, event);
   }
 
+  function startRotate(event) {
+    beginDrag("rotate", null, event);
+    const rect = stage.getBoundingClientRect();
+    const pivot = rotationPivot(state.elementName, state.drag.start);
+    state.drag.pivotX = rect.left + pivot.x;
+    state.drag.pivotY = rect.top + pivot.y;
+    state.drag.startAngle = pointerAngle(state.drag, event);
+  }
+
+  function pointerAngle(drag, event) {
+    return (Math.atan2(event.clientY - drag.pivotY, event.clientX - drag.pivotX) * 180) / Math.PI;
+  }
+
   /**
    * 框的縮放（對邊／對角固定不動）：
    *   四個角：框等比縮放；不限高度時高度維持「不限」，圖層照舊以寬度等比放大縮小
@@ -4270,7 +4518,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       drag.moved = true;
     }
 
-    if (state.elementName === "$BG") {
+    if (drag.mode === "rotate") {
+      let angle = (drag.start.rotation || 0) + pointerAngle(drag, event) - drag.startAngle;
+      if (event.shiftKey) {
+        angle = Math.round(angle / ROTATION_SNAP) * ROTATION_SNAP;
+      }
+      fields.rotation.value = String(normalizeAngle(Math.round(angle * 10) / 10));
+    } else if (state.elementName === "$BG") {
       // 背景拖拉／縮放時即時夾在滿版範圍內（可為負值，但不會露出白邊）
       const next =
         drag.mode === "move"
@@ -4298,6 +4552,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.drag = null;
     stage.classList.remove("is-dragging");
     commitFields();
+    if (drag.mode === "rotate") {
+      applyElementStyle(state.elementName, readFieldsAsSpec()); // 放開後才請 Photoshop 產生旋轉預覽
+    }
     noteClick(drag);
   }
 
@@ -6607,6 +6864,48 @@ async function buildTextOverridePreview(master, layerName, required, names, over
       }
     }
   }, "擷取獨立樣板的文字");
+  const buffer = await file.read({ format: formats.binary });
+  return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
+}
+
+// 旋轉後的圖層預覽（UXP 不支援 CSS transform，改由 Photoshop 轉好再匯出）；
+// 同時只跑一個，避免 executeAsModal 互相衝突
+let rotatedPreviewQueue = Promise.resolve();
+
+function buildRotatedPreview(master, layerName, required, names, rotation, override) {
+  const job = rotatedPreviewQueue.then(() => buildRotatedPreviewNow(master, layerName, required, names, rotation, override));
+  rotatedPreviewQueue = job.catch(() => {});
+  return job;
+}
+
+async function buildRotatedPreviewNow(master, layerName, required, names, rotation, override) {
+  const tempFolder = await localFileSystem.getTemporaryFolder();
+  const file = await tempFolder.createFile(`preview-rotate-${master.id}-${Date.now()}.png`, {
+    overwrite: true,
+  });
+  let size = null;
+  await runModal(async () => {
+    await closeLeftoverPreviewDocuments();
+    const container = getMcdSourceContainer(master, required, names);
+    const layer = findNamedLayer(container, layerName);
+    if (!layer) {
+      throw new Error(`找不到圖層 ${layerName}`);
+    }
+    try {
+      size = await exportLayerPreviewPng(master, layer, file, layerName, async (temp, copy) => {
+        if (override) {
+          await applyTextOverride(temp, copy, override);
+          app.activeDocument = temp;
+        }
+        await rotateLayer(copy, rotation);
+      });
+    } finally {
+      await closeLeftoverPreviewDocuments();
+      if (isDocumentOpen(master)) {
+        app.activeDocument = master;
+      }
+    }
+  }, "產生旋轉預覽");
   const buffer = await file.read({ format: formats.binary });
   return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
 }
