@@ -116,10 +116,17 @@
         padding: 4px 6px;
       }
 
+      /* 實際尺寸比面板大時，只捲預覽區，不把整頁撐開 */
+      .preview-viewport {
+        width: 100%;
+        margin-top: 10px;
+        overflow: hidden;
+        box-sizing: border-box;
+      }
+
       .preview-stage {
         position: relative;
         width: 100%;
-        margin-top: 10px;
         overflow: hidden;
         /* 產出的新文件以白色填滿，預覽底色一致，半透明的 $BG 才不會看起來變暗 */
         background: white;
@@ -499,6 +506,11 @@
         line-height: 20px;
       }
 
+      .picker-title-row .small-btn.is-actual-size {
+        background: #0d66d0;
+        border-color: #2680eb;
+      }
+
       .manager-row {
         display: flex;
         flex-direction: row;
@@ -862,6 +874,14 @@
                   <button
                     type="button"
                     class="small-btn"
+                    data-role="btn-preview-scale"
+                    title="目前預覽撐滿面板，點一下改為實際尺寸"
+                  >
+                    放到最大
+                  </button>
+                  <button
+                    type="button"
+                    class="small-btn"
                     data-role="btn-sync-sizes"
                   >
                     同步圖層大小
@@ -874,7 +894,9 @@
             </div>
           </div>
 
-          <div class="preview-stage" data-role="preview-stage"></div>
+          <div class="preview-viewport" data-role="preview-viewport">
+            <div class="preview-stage" data-role="preview-stage"></div>
+          </div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
             <label class="independent-label" title="勾選後按「儲存設定值」：這個樣板的文字與圖層大小獨立，不和其他樣板共用">
@@ -1364,6 +1386,14 @@
                   <button
                     type="button"
                     class="small-btn"
+                    data-role="btn-preview-scale"
+                    title="目前預覽撐滿面板，點一下改為實際尺寸"
+                  >
+                    放到最大
+                  </button>
+                  <button
+                    type="button"
+                    class="small-btn"
                     data-role="btn-sync-sizes"
                   >
                     同步圖層
@@ -1448,7 +1478,9 @@
             </div>
           </div>
 
-          <div class="preview-stage" data-role="preview-stage"></div>
+          <div class="preview-viewport" data-role="preview-viewport">
+            <div class="preview-stage" data-role="preview-stage"></div>
+          </div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
             <button type="button" data-role="btn-canvas-size">調整版面尺寸</button>
