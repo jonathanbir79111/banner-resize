@@ -304,13 +304,13 @@
         margin-top: 4px;
       }
 
-.text-editor-hint {
+      .text-editor-hint {
         font-size: 10px;
         color: #999;
         margin-top: 4px;
       }
 
-            .text-editor-input {
+      .text-editor-input {
         width: 100%;
         box-sizing: border-box;
         margin-top: 4px;
@@ -320,7 +320,7 @@
         min-height: 48px;
       }
 
-.text-editor-actions {
+      .text-editor-actions {
         display: flex;
         flex-direction: row;
         width: 100%;
@@ -500,10 +500,23 @@
         gap: 6px;
       }
 
+      /* 標題（例如「圖層」）不換行；右邊按鈕多時縮小按鈕留白與字，不擠壓標題 */
+      .picker-title-row .picker-title {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .picker-title-row .title-buttons {
+        gap: 4px;
+        min-width: 0;
+      }
+
       .picker-title-row .small-btn {
         height: 22px;
-        padding: 0 10px;
+        padding: 0 6px;
+        font-size: 10px;
         line-height: 20px;
+        white-space: nowrap;
       }
 
       .picker-title-row .small-btn.is-actual-size {
@@ -870,7 +883,9 @@
                   <label class="grid-check-label" title="顯示格線">
                     <input type="checkbox" data-role="grid-check" />
                   </label>
-                  <button type="button" class="small-btn" data-role="btn-grid">格線</button>
+                  <button type="button" class="small-btn" data-role="btn-grid">
+                    格線
+                  </button>
                   <button
                     type="button"
                     class="small-btn"
@@ -899,11 +914,16 @@
           </div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
-            <label class="independent-label" title="勾選後按「儲存設定值」：這個樣板的文字與圖層大小獨立，不和其他樣板共用">
+            <label
+              class="independent-label"
+              title="勾選後按「儲存設定值」：這個樣板的文字與圖層大小獨立，不和其他樣板共用"
+            >
               <input type="checkbox" data-role="independent-check" />
               獨立
             </label>
-            <button type="button" data-role="btn-canvas-size">調整版面尺寸</button>
+            <button type="button" data-role="btn-canvas-size">
+              調整版面尺寸
+            </button>
             <button type="button" data-role="btn-add-text">新增文字</button>
             <button type="button" data-role="btn-reset-defaults">
               還原預設值
@@ -918,25 +938,49 @@
               <div data-role="canvas-size-edit-view">
                 <div class="style-row">
                   <span class="size-label">版面尺寸寬度</span>
-                  <input type="text" class="text-input style-input" data-role="canvas-width" />
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="canvas-width"
+                  />
                   <span class="style-unit">像素</span>
                 </div>
                 <div class="style-row">
                   <span class="size-label">版面尺寸高度</span>
-                  <input type="text" class="text-input style-input" data-role="canvas-height" />
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="canvas-height"
+                  />
                   <span class="style-unit">像素</span>
                 </div>
                 <p class="hint" data-role="canvas-size-error"></p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-canvas-size-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-canvas-size-save" variant="cta">儲存</sp-button>
+                  <sp-button
+                    data-role="btn-canvas-size-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-canvas-size-save" variant="cta"
+                    >儲存</sp-button
+                  >
                 </div>
               </div>
               <div data-role="canvas-size-confirm-view" style="display: none">
-                <p class="dialog-text" data-role="canvas-size-confirm-text">確認要更改此版面尺寸？</p>
+                <p class="dialog-text" data-role="canvas-size-confirm-text">
+                  確認要更改此版面尺寸？
+                </p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-canvas-size-confirm-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-canvas-size-confirm-ok" variant="cta">確認</sp-button>
+                  <sp-button
+                    data-role="btn-canvas-size-confirm-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button
+                    data-role="btn-canvas-size-confirm-ok"
+                    variant="cta"
+                    >確認</sp-button
+                  >
                 </div>
               </div>
             </div>
@@ -958,34 +1002,69 @@
               </div>
               <div class="style-row">
                 <span class="style-label">大小</span>
-                <input type="text" class="text-input style-input" data-role="text-font-size" />
+                <input
+                  type="text"
+                  class="text-input style-input"
+                  data-role="text-font-size"
+                />
                 <span class="style-unit">pt</span>
               </div>
               <div class="style-row">
                 <span class="style-label">對齊</span>
-                <button type="button" class="small-btn" data-text-align="left">靠左</button>
-                <button type="button" class="small-btn" data-text-align="center">置中</button>
-                <button type="button" class="small-btn" data-text-align="right">靠右</button>
+                <button type="button" class="small-btn" data-text-align="left">
+                  靠左
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-text-align="center"
+                >
+                  置中
+                </button>
+                <button type="button" class="small-btn" data-text-align="right">
+                  靠右
+                </button>
               </div>
               <div class="style-row">
                 <span class="style-label">顏色</span>
-                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)" />
-                <div class="color-swatch" data-role="text-color-swatch" title="點兩下開啟檢色器"></div>
+                <input
+                  type="text"
+                  class="text-input style-input"
+                  data-role="text-color"
+                  placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)"
+                />
+                <div
+                  class="color-swatch"
+                  data-role="text-color-swatch"
+                  title="點兩下開啟檢色器"
+                ></div>
               </div>
               <div class="color-hint" data-role="text-color-hint"></div>
               <div class="manager-actions">
-                <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
-                <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
+                <sp-button data-role="btn-text-style-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-text-style-save" variant="cta"
+                  >確認</sp-button
+                >
               </div>
             </div>
           </dialog>
 
           <dialog data-role="delete-text-dialog">
             <div class="dialog-body">
-              <p class="dialog-text" data-role="delete-text-message">請問要刪除文字區塊嗎？</p>
+              <p class="dialog-text" data-role="delete-text-message">
+                請問要刪除文字區塊嗎？
+              </p>
               <div class="manager-actions">
-                <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
-                <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+                <sp-button
+                  data-role="btn-delete-text-cancel"
+                  variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-delete-text-confirm" variant="cta"
+                  >確認</sp-button
+                >
               </div>
             </div>
           </dialog>
@@ -995,31 +1074,73 @@
               <div data-role="grid-edit-view">
                 <div class="style-row">
                   <span class="style-label">直</span>
-                  <input type="text" class="text-input style-input" data-role="grid-vertical" />
-                <div class="stepper">
-                  <button type="button" data-grid-step="vertical" data-grid-dir="up">▲</button>
-                  <button type="button" data-grid-step="vertical" data-grid-dir="down">▼</button>
-                </div>
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="grid-vertical"
+                  />
+                  <div class="stepper">
+                    <button
+                      type="button"
+                      data-grid-step="vertical"
+                      data-grid-dir="up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      data-grid-step="vertical"
+                      data-grid-dir="down"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
                 <div class="style-row">
                   <span class="style-label">橫</span>
-                  <input type="text" class="text-input style-input" data-role="grid-horizontal" />
-                <div class="stepper">
-                  <button type="button" data-grid-step="horizontal" data-grid-dir="up">▲</button>
-                  <button type="button" data-grid-step="horizontal" data-grid-dir="down">▼</button>
-                </div>
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="grid-horizontal"
+                  />
+                  <div class="stepper">
+                    <button
+                      type="button"
+                      data-grid-step="horizontal"
+                      data-grid-dir="up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      data-grid-step="horizontal"
+                      data-grid-dir="down"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
                 <p class="hint" data-role="grid-error"></p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-grid-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-grid-save" variant="cta">儲存</sp-button>
+                  <sp-button data-role="btn-grid-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-grid-save" variant="cta"
+                    >儲存</sp-button
+                  >
                 </div>
               </div>
               <div data-role="grid-confirm-view" style="display: none">
                 <p class="dialog-text">確認儲存設定</p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-grid-confirm-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-grid-confirm-ok" variant="cta">確認</sp-button>
+                  <sp-button
+                    data-role="btn-grid-confirm-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-grid-confirm-ok" variant="cta"
+                    >確認</sp-button
+                  >
                 </div>
               </div>
             </div>
@@ -1027,7 +1148,9 @@
 
           <dialog data-role="sync-dialog">
             <div class="dialog-body">
-              <p class="dialog-text" data-role="sync-dialog-text">請問要同步全部的圖層大小嗎?</p>
+              <p class="dialog-text" data-role="sync-dialog-text">
+                請問要同步全部的圖層大小嗎?
+              </p>
               <div class="manager-actions">
                 <sp-button data-role="btn-sync-cancel" variant="secondary"
                   >取消</sp-button
@@ -1138,7 +1261,11 @@
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
-              <input type="text" inputmode="decimal" data-role="field-leftPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-leftPercent"
+              />
               <div class="stepper">
                 <button
                   type="button"
@@ -1158,7 +1285,11 @@
             </div>
             <div class="settings-field-row">
               <label>靠上%</label>
-              <input type="text" inputmode="decimal" data-role="field-topPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-topPercent"
+              />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
                 <button
@@ -1179,7 +1310,11 @@
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
-              <input type="text" inputmode="decimal" data-role="field-widthPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-widthPercent"
+              />
               <div class="stepper">
                 <button
                   type="button"
@@ -1382,7 +1517,9 @@
                   <label class="grid-check-label" title="顯示格線">
                     <input type="checkbox" data-role="grid-check" />
                   </label>
-                  <button type="button" class="small-btn" data-role="btn-grid">格線</button>
+                  <button type="button" class="small-btn" data-role="btn-grid">
+                    格線
+                  </button>
                   <button
                     type="button"
                     class="small-btn"
@@ -1483,7 +1620,9 @@
           </div>
           <div class="preview-bar">
             <span data-role="preview-status" class="hint"></span>
-            <button type="button" data-role="btn-canvas-size">調整版面尺寸</button>
+            <button type="button" data-role="btn-canvas-size">
+              調整版面尺寸
+            </button>
             <button type="button" data-role="btn-add-text">新增文字</button>
             <button type="button" data-role="btn-reset-defaults">
               還原預設值
@@ -1498,25 +1637,49 @@
               <div data-role="canvas-size-edit-view">
                 <div class="style-row">
                   <span class="size-label">版面尺寸寬度</span>
-                  <input type="text" class="text-input style-input" data-role="canvas-width" />
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="canvas-width"
+                  />
                   <span class="style-unit">像素</span>
                 </div>
                 <div class="style-row">
                   <span class="size-label">版面尺寸高度</span>
-                  <input type="text" class="text-input style-input" data-role="canvas-height" />
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="canvas-height"
+                  />
                   <span class="style-unit">像素</span>
                 </div>
                 <p class="hint" data-role="canvas-size-error"></p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-canvas-size-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-canvas-size-save" variant="cta">儲存</sp-button>
+                  <sp-button
+                    data-role="btn-canvas-size-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-canvas-size-save" variant="cta"
+                    >儲存</sp-button
+                  >
                 </div>
               </div>
               <div data-role="canvas-size-confirm-view" style="display: none">
-                <p class="dialog-text" data-role="canvas-size-confirm-text">確認要更改此版面尺寸？</p>
+                <p class="dialog-text" data-role="canvas-size-confirm-text">
+                  確認要更改此版面尺寸？
+                </p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-canvas-size-confirm-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-canvas-size-confirm-ok" variant="cta">確認</sp-button>
+                  <sp-button
+                    data-role="btn-canvas-size-confirm-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button
+                    data-role="btn-canvas-size-confirm-ok"
+                    variant="cta"
+                    >確認</sp-button
+                  >
                 </div>
               </div>
             </div>
@@ -1538,34 +1701,69 @@
               </div>
               <div class="style-row">
                 <span class="style-label">大小</span>
-                <input type="text" class="text-input style-input" data-role="text-font-size" />
+                <input
+                  type="text"
+                  class="text-input style-input"
+                  data-role="text-font-size"
+                />
                 <span class="style-unit">pt</span>
               </div>
               <div class="style-row">
                 <span class="style-label">對齊</span>
-                <button type="button" class="small-btn" data-text-align="left">靠左</button>
-                <button type="button" class="small-btn" data-text-align="center">置中</button>
-                <button type="button" class="small-btn" data-text-align="right">靠右</button>
+                <button type="button" class="small-btn" data-text-align="left">
+                  靠左
+                </button>
+                <button
+                  type="button"
+                  class="small-btn"
+                  data-text-align="center"
+                >
+                  置中
+                </button>
+                <button type="button" class="small-btn" data-text-align="right">
+                  靠右
+                </button>
               </div>
               <div class="style-row">
                 <span class="style-label">顏色</span>
-                <input type="text" class="text-input style-input" data-role="text-color" placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)" />
-                <div class="color-swatch" data-role="text-color-swatch" title="點兩下開啟檢色器"></div>
+                <input
+                  type="text"
+                  class="text-input style-input"
+                  data-role="text-color"
+                  placeholder="#000000、rgb(0,0,0)、hsl(0,0%,0%)"
+                />
+                <div
+                  class="color-swatch"
+                  data-role="text-color-swatch"
+                  title="點兩下開啟檢色器"
+                ></div>
               </div>
               <div class="color-hint" data-role="text-color-hint"></div>
               <div class="manager-actions">
-                <sp-button data-role="btn-text-style-cancel" variant="secondary">取消</sp-button>
-                <sp-button data-role="btn-text-style-save" variant="cta">確認</sp-button>
+                <sp-button data-role="btn-text-style-cancel" variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-text-style-save" variant="cta"
+                  >確認</sp-button
+                >
               </div>
             </div>
           </dialog>
 
           <dialog data-role="delete-text-dialog">
             <div class="dialog-body">
-              <p class="dialog-text" data-role="delete-text-message">請問要刪除文字區塊嗎？</p>
+              <p class="dialog-text" data-role="delete-text-message">
+                請問要刪除文字區塊嗎？
+              </p>
               <div class="manager-actions">
-                <sp-button data-role="btn-delete-text-cancel" variant="secondary">取消</sp-button>
-                <sp-button data-role="btn-delete-text-confirm" variant="cta">確認</sp-button>
+                <sp-button
+                  data-role="btn-delete-text-cancel"
+                  variant="secondary"
+                  >取消</sp-button
+                >
+                <sp-button data-role="btn-delete-text-confirm" variant="cta"
+                  >確認</sp-button
+                >
               </div>
             </div>
           </dialog>
@@ -1575,31 +1773,73 @@
               <div data-role="grid-edit-view">
                 <div class="style-row">
                   <span class="style-label">直</span>
-                  <input type="text" class="text-input style-input" data-role="grid-vertical" />
-                <div class="stepper">
-                  <button type="button" data-grid-step="vertical" data-grid-dir="up">▲</button>
-                  <button type="button" data-grid-step="vertical" data-grid-dir="down">▼</button>
-                </div>
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="grid-vertical"
+                  />
+                  <div class="stepper">
+                    <button
+                      type="button"
+                      data-grid-step="vertical"
+                      data-grid-dir="up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      data-grid-step="vertical"
+                      data-grid-dir="down"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
                 <div class="style-row">
                   <span class="style-label">橫</span>
-                  <input type="text" class="text-input style-input" data-role="grid-horizontal" />
-                <div class="stepper">
-                  <button type="button" data-grid-step="horizontal" data-grid-dir="up">▲</button>
-                  <button type="button" data-grid-step="horizontal" data-grid-dir="down">▼</button>
-                </div>
+                  <input
+                    type="text"
+                    class="text-input style-input"
+                    data-role="grid-horizontal"
+                  />
+                  <div class="stepper">
+                    <button
+                      type="button"
+                      data-grid-step="horizontal"
+                      data-grid-dir="up"
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      data-grid-step="horizontal"
+                      data-grid-dir="down"
+                    >
+                      ▼
+                    </button>
+                  </div>
                 </div>
                 <p class="hint" data-role="grid-error"></p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-grid-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-grid-save" variant="cta">儲存</sp-button>
+                  <sp-button data-role="btn-grid-cancel" variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-grid-save" variant="cta"
+                    >儲存</sp-button
+                  >
                 </div>
               </div>
               <div data-role="grid-confirm-view" style="display: none">
                 <p class="dialog-text">確認儲存設定</p>
                 <div class="manager-actions">
-                  <sp-button data-role="btn-grid-confirm-cancel" variant="secondary">取消</sp-button>
-                  <sp-button data-role="btn-grid-confirm-ok" variant="cta">確認</sp-button>
+                  <sp-button
+                    data-role="btn-grid-confirm-cancel"
+                    variant="secondary"
+                    >取消</sp-button
+                  >
+                  <sp-button data-role="btn-grid-confirm-ok" variant="cta"
+                    >確認</sp-button
+                  >
                 </div>
               </div>
             </div>
@@ -1720,7 +1960,11 @@
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>靠左%</label>
-              <input type="text" inputmode="decimal" data-role="field-leftPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-leftPercent"
+              />
               <div class="stepper">
                 <button
                   type="button"
@@ -1740,7 +1984,11 @@
             </div>
             <div class="settings-field-row">
               <label>靠上%</label>
-              <input type="text" inputmode="decimal" data-role="field-topPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-topPercent"
+              />
               <div class="stepper">
                 <!-- 靠上% 的 ▲ 要讓圖往上移，即數值變小 -->
                 <button
@@ -1761,7 +2009,11 @@
             </div>
             <div class="settings-field-row">
               <label>寬度%</label>
-              <input type="text" inputmode="decimal" data-role="field-widthPercent" />
+              <input
+                type="text"
+                inputmode="decimal"
+                data-role="field-widthPercent"
+              />
               <div class="stepper">
                 <button
                   type="button"
@@ -1934,7 +2186,9 @@
           <span id="loading-text" class="dialog-text loading-text"></span>
           <span id="loading-percent" class="loading-percent">0%</span>
         </div>
-        <div class="loading-track"><div id="loading-bar" class="loading-bar"></div></div>
+        <div class="loading-track">
+          <div id="loading-bar" class="loading-bar"></div>
+        </div>
       </div>
     </dialog>
 
