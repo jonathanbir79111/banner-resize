@@ -3041,6 +3041,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     drag: null,
     images: {},
     selection: null,
+    // 預覽大小：false 放到最大（跟著面板），true 實際尺寸（版面像素）
+    previewActualSize: false,
     // 套圖：按「預覽套圖」後的各組換圖（選擇套圖樣板＝預設 + 套圖01.psd…）
     sets: [],
     outputIndex: 0,
@@ -3816,23 +3818,60 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     updateLayerButtons();
   }
 
-  // 預覽區依版面比例：橫式／正方形撐滿面板寬；直式（高 > 寬）高度最多等於面板寬，
-  // 寬度跟著等比縮小並置中，不會變成一整條超長的預覽
+  // 預覽區兩種大小：
+  // 放到最大：橫式／正方形撐滿面板寬；直式（高 > 寬）高度最多等於面板寬，寬度等比縮小並置中
+  // 實際尺寸：寬高等於版面像素。比面板大時只在預覽區裡捲動，不把整頁撐開
   function resizeStage() {
     const canvas = canvasSize();
-    const available =
-      (stage.parentElement && stage.parentElement.clientWidth) ||
-      stage.clientWidth;
+    const viewport = stage.parentElement;
+    const actual = Boolean(state.previewActualSize);
+    if (viewport && viewport.classList.contains("preview-viewport")) {
+      viewport.style.overflow = actual ? "auto" : "hidden";
+      viewport.style.maxHeight = actual
+        ? `${Math.max(Math.round(window.innerHeight * 0.7), 160)}px`
+        : "";
+      // 回到放到最大時清掉捲動位置，避免預覽停在裁切過的位置
+      if (!actual) {
+        viewport.scrollLeft = 0;
+        viewport.scrollTop = 0;
+      }
+    }
+    const available = (viewport && viewport.clientWidth) || stage.clientWidth;
     let width = available;
-    let height = (available * canvas.height) / canvas.width;
-    if (height > available) {
+    let height = (available * canvas.height) / Math.max(canvas.width, 1);
+    if (actual) {
+      width = Math.max(Math.round(canvas.width), 1);
+      height = Math.max(Math.round(canvas.height), 1);
+    } else if (height > available) {
       height = available;
-      width = (available * canvas.width) / canvas.height;
+      width = (available * canvas.width) / Math.max(canvas.height, 1);
     }
     stage.style.width = `${width}px`;
     stage.style.height = `${height}px`;
     stage.style.marginLeft = "auto";
     stage.style.marginRight = "auto";
+    updatePreviewScaleButton();
+  }
+
+  function layoutPreview() {
+    resizeStage();
+    updateHighlight();
+    if (state.textEditor && state.textEditor.box) {
+      positionTextEditor(state.textEditor.box, state.textEditor.name);
+    }
+  }
+
+  function updatePreviewScaleButton() {
+    const button = el("btn-preview-scale");
+    if (!button) {
+      return;
+    }
+    const actual = Boolean(state.previewActualSize);
+    button.textContent = !actual ? "看實際尺寸" : "滿版檢視";
+    button.title = actual
+      ? "目前以版面像素顯示，點一下改為放到最大"
+      : "目前預覽撐滿面板，點一下改為實際尺寸";
+    button.classList.toggle("is-actual-size", actual);
   }
 
   function createSelection(zIndex) {
@@ -4100,12 +4139,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     state.selection = createSelection(cache.order.length + 1);
     applyLayerOrder();
-    if (state.textEditor && state.textEditor.box) {
-      positionTextEditor(state.textEditor.box, state.textEditor.name);
-    }
-
-    resizeStage();
-    updateHighlight();
+    layoutPreview();
   }
 
   // ----- 預覽上雙擊圖層改文字（改完直接存 PSD） -----
@@ -5724,6 +5758,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     renderGrid();
   });
   el("btn-grid").addEventListener("click", openGridSettings);
+  el("btn-preview-scale").addEventListener("click", () => {
+    if (state.drag) {
+      return;
+    }
+    state.previewActualSize = !state.previewActualSize;
+    layoutPreview();
+  });
   root.querySelectorAll("[data-grid-step]").forEach((button) => {
     button.addEventListener("click", () => {
       const input = el(`grid-${button.getAttribute("data-grid-step")}`);
@@ -5896,8 +5937,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   window.addEventListener("resize", () => {
     if (state.previewCache) {
-      resizeStage();
-      updateSelectionBox();
+      layoutPreview();
     }
   });
 
