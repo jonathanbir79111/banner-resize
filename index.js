@@ -1360,7 +1360,11 @@ function normalizeElements(raw) {
 // 沒有設定值的圖層（例如新增的套圖圖層）用的預設框
 function defaultSpecFor(name) {
   return deepClone(
-    DEFAULT_VARIANT_ELEMENTS[name] || { leftPercent: 10, topPercent: 10, widthPercent: 30 },
+    DEFAULT_VARIANT_ELEMENTS[name] || {
+      leftPercent: 10,
+      topPercent: 10,
+      widthPercent: 30,
+    },
   );
 }
 
@@ -1462,7 +1466,9 @@ function normalizeTemplate(raw) {
       height: parsePositiveInt(values.height) || BUILTIN_RESIZE_VALUES.height,
       variants: variants.map((variant) => {
         const out = {
-          outputDocument: String((variant && variant.outputDocument) || "").trim(),
+          outputDocument: String(
+            (variant && variant.outputDocument) || "",
+          ).trim(),
           elements: normalizeElements(variant && variant.elements),
         };
         const order = normalizeLayerOrder(variant && variant.order);
@@ -1472,7 +1478,9 @@ function normalizeTemplate(raw) {
         if (variant && variant.independent === true) {
           out.independent = true;
         }
-        const overrides = normalizeTextOverrides(variant && variant.textOverrides);
+        const overrides = normalizeTextOverrides(
+          variant && variant.textOverrides,
+        );
         if (overrides) {
           out.textOverrides = overrides;
         }
@@ -1670,7 +1678,9 @@ async function readModuleFile(folder) {
   const data = unpackModuleData(JSON.parse(await file.read()));
   return {
     templates: Array.isArray(data.templates) ? data.templates : [],
-    applyTemplates: Array.isArray(data.applyTemplates) ? data.applyTemplates : [],
+    applyTemplates: Array.isArray(data.applyTemplates)
+      ? data.applyTemplates
+      : [],
     applyLayers: normalizeApplyLayers(data.applyLayers),
     applyRequiredLayers: normalizeRequiredLayers(
       data.applyRequiredLayers,
@@ -1693,7 +1703,10 @@ async function readModuleFile(folder) {
 function unpackModuleData(data) {
   const source = data && typeof data === "object" ? data : {};
   const resize = source.resize;
-  const resizeObject = resize && typeof resize === "object" && !Array.isArray(resize) ? resize : null;
+  const resizeObject =
+    resize && typeof resize === "object" && !Array.isArray(resize)
+      ? resize
+      : null;
   const layerSettings =
     source["image-set-layers"] && typeof source["image-set-layers"] === "object"
       ? source["image-set-layers"]
@@ -1706,11 +1719,21 @@ function unpackModuleData(data) {
   }
   return {
     templates,
-    reference: resizeObject && resizeObject.reference ? resizeObject.reference : source.reference,
-    applyTemplates: Array.isArray(source["image-set"]) ? source["image-set"] : source.applyTemplates,
-    applyLayers: layerSettings.layers !== undefined ? layerSettings.layers : source.applyLayers,
+    reference:
+      resizeObject && resizeObject.reference
+        ? resizeObject.reference
+        : source.reference,
+    applyTemplates: Array.isArray(source["image-set"])
+      ? source["image-set"]
+      : source.applyTemplates,
+    applyLayers:
+      layerSettings.layers !== undefined
+        ? layerSettings.layers
+        : source.applyLayers,
     applyRequiredLayers:
-      layerSettings.required !== undefined ? layerSettings.required : source.applyRequiredLayers,
+      layerSettings.required !== undefined
+        ? layerSettings.required
+        : source.applyRequiredLayers,
   };
 }
 
@@ -1735,7 +1758,10 @@ function normalizeReference(raw) {
   }
   const out = { fileName: String(raw.fileName || DEFAULT_REFERENCE_FILE) };
   const widths = raw.widths;
-  if (widths && MCD_POSITION_ELEMENT_NAMES.every((name) => Number(widths[name]) > 0)) {
+  if (
+    widths &&
+    MCD_POSITION_ELEMENT_NAMES.every((name) => Number(widths[name]) > 0)
+  ) {
     out.widths = {};
     MCD_POSITION_ELEMENT_NAMES.forEach((name) => {
       out.widths[name] = Number(widths[name]);
@@ -1761,7 +1787,9 @@ async function saveModuleStore() {
 async function loadModuleStore(folder) {
   const raw = await readModuleFile(folder);
   moduleStore.folder = folder;
-  moduleStore.templates = ((raw && raw.templates) || []).map(normalizeTemplate).filter(Boolean);
+  moduleStore.templates = ((raw && raw.templates) || [])
+    .map(normalizeTemplate)
+    .filter(Boolean);
   moduleStore.reference = raw ? raw.reference : null;
   moduleStore.applyTemplates = ((raw && raw.applyTemplates) || [])
     .map(normalizeApplyTemplate)
@@ -1833,7 +1861,11 @@ function findNamedLayer(container, name) {
 }
 
 // 回傳找得到的 $ 圖層；required 內的圖層缺少時丟錯（Resize 需要全部六個，套圖依「必選」設定）
-function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+function requireMcdSmartLayers(
+  container,
+  required = MCD_SMART_LAYER_NAMES,
+  names = MCD_SMART_LAYER_NAMES,
+) {
   const layers = {};
   const missing = [];
   for (const name of names) {
@@ -1850,7 +1882,11 @@ function requireMcdSmartLayers(container, required = MCD_SMART_LAYER_NAMES, name
   return layers;
 }
 
-function getMcdSourceContainer(doc, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+function getMcdSourceContainer(
+  doc,
+  required = MCD_SMART_LAYER_NAMES,
+  names = MCD_SMART_LAYER_NAMES,
+) {
   const boards = listArtboards(doc);
   for (const board of boards) {
     try {
@@ -1914,7 +1950,8 @@ async function createMcdDocumentFromMaster(
   // 後複製的圖層會疊在上面：有指定層級就照「$BG + 樣板順序」由下往上複製，否則沿用母版順序
   // （層級裡沒有的圖層，例如之後才新增的文字，放在最上面）
   const others = Object.keys(sourceLayers).filter(
-    (layerName) => layerName !== "$BG" && !(layerOrder || []).includes(layerName),
+    (layerName) =>
+      layerName !== "$BG" && !(layerOrder || []).includes(layerName),
   );
   const bottomToTop = layerOrder
     ? ["$BG", ...layerOrder, ...others]
@@ -1933,7 +1970,12 @@ async function createMcdDocumentFromMaster(
 }
 
 async function layoutSmartByPercents(layer, canvasW, canvasH, spec, name) {
-  await layoutInFrame(layer, { left: 0, top: 0, right: canvasW, bottom: canvasH }, spec, name);
+  await layoutInFrame(
+    layer,
+    { left: 0, top: 0, right: canvasW, bottom: canvasH },
+    spec,
+    name,
+  );
 }
 
 // 等比放進框內（見 fitInFrame），框外不會超出；frame 為畫布（工作區域或整份文件）的像素範圍
@@ -2078,12 +2120,16 @@ function findOpenDocumentByPath(path) {
 function findTemplateIndexIn(list, doc) {
   const path = readDocumentPath(doc);
   const byPath = path
-    ? list.findIndex((template) => template.source && template.source.path === path)
+    ? list.findIndex(
+        (template) => template.source && template.source.path === path,
+      )
     : -1;
   if (byPath >= 0 || !doc) {
     return byPath;
   }
-  return list.findIndex((template) => template.source && template.source.fileName === doc.name);
+  return list.findIndex(
+    (template) => template.source && template.source.fileName === doc.name,
+  );
 }
 
 function findTemplateIndexForDocument(doc) {
@@ -2123,11 +2169,17 @@ function measureRelativeWidths(master) {
 }
 
 function referenceFileName() {
-  return (moduleStore.reference && moduleStore.reference.fileName) || DEFAULT_REFERENCE_FILE;
+  return (
+    (moduleStore.reference && moduleStore.reference.fileName) ||
+    DEFAULT_REFERENCE_FILE
+  );
 }
 
 function isReferenceDocument(doc) {
-  return Boolean(doc) && stripExtension(doc.name) === stripExtension(referenceFileName());
+  return (
+    Boolean(doc) &&
+    stripExtension(doc.name) === stripExtension(referenceFileName())
+  );
 }
 
 // 基準 PSD 開啟時量一次並存起來（之後不必再開基準 PSD 也能換算）
@@ -2137,7 +2189,10 @@ async function captureReferenceIfNeeded(doc) {
     return;
   }
   try {
-    moduleStore.reference = { fileName: referenceFileName(), widths: measureRelativeWidths(doc) };
+    moduleStore.reference = {
+      fileName: referenceFileName(),
+      widths: measureRelativeWidths(doc),
+    };
     await saveModuleStore();
   } catch (_error) {
     // 量不到就維持沒有基準，換算時退回內建數值
@@ -2172,7 +2227,9 @@ function scaleElementsForDocument(elements, doc) {
 // 新模組（或草稿）的數值：內建樣板，寬度依基準換算
 function initialValuesForDocument(doc) {
   const values = deepClone(BUILTIN_RESIZE_VALUES);
-  values.variants.forEach((variant) => scaleElementsForDocument(variant.elements, doc));
+  values.variants.forEach((variant) =>
+    scaleElementsForDocument(variant.elements, doc),
+  );
   return values;
 }
 
@@ -2222,7 +2279,10 @@ async function activateDocument(doc) {
   }
   await runModal(async () => {
     // 排隊期間作用中文件可能已變，實際執行時再判斷一次
-    if (isDocumentOpen(doc) && (!app.activeDocument || app.activeDocument.id !== doc.id)) {
+    if (
+      isDocumentOpen(doc) &&
+      (!app.activeDocument || app.activeDocument.id !== doc.id)
+    ) {
       app.activeDocument = doc;
     }
   }, "切換文件");
@@ -2257,7 +2317,14 @@ function resizeSourceLayers(master) {
  * 產出一個 Resize 樣板的文件（需在 modal 內）：新文件 → 複製圖層 → 獨立樣板的文字 → 排版。
  * 產出每個樣板的 PSD 都用這一份。
  */
-async function buildResizeVariantDocument(master, sourceLayers, docName, canvasW, canvasH, variant) {
+async function buildResizeVariantDocument(
+  master,
+  sourceLayers,
+  docName,
+  canvasW,
+  canvasH,
+  variant,
+) {
   app.activeDocument = master;
   const newDoc = await createMcdDocumentFromMaster(
     master,
@@ -2272,7 +2339,11 @@ async function buildResizeVariantDocument(master, sourceLayers, docName, canvasW
     for (const layerName of Object.keys(variant.textOverrides)) {
       const layer = findNamedLayer(newDoc, layerName);
       if (layer) {
-        await applyTextOverride(newDoc, layer, variant.textOverrides[layerName]);
+        await applyTextOverride(
+          newDoc,
+          layer,
+          variant.textOverrides[layerName],
+        );
       }
     }
     app.activeDocument = newDoc;
@@ -2308,22 +2379,22 @@ async function generateResizeDocuments(master, values) {
 
   for (const job of jobs) {
     const docName = stripExtension(job.fileName);
-    const { width: canvasW, height: canvasH } = variantCanvasSize(values, job.variant);
+    const { width: canvasW, height: canvasH } = variantCanvasSize(
+      values,
+      job.variant,
+    );
     try {
-      await runModal(
-        async () => {
-          const newDoc = await buildResizeVariantDocument(
-            master,
-            sourceLayers,
-            docName,
-            canvasW,
-            canvasH,
-            job.variant,
-          );
-          await saveDocumentAsPsd(newDoc, job.file);
-        },
-        `產製 ${docName}`,
-      );
+      await runModal(async () => {
+        const newDoc = await buildResizeVariantDocument(
+          master,
+          sourceLayers,
+          docName,
+          canvasW,
+          canvasH,
+          job.variant,
+        );
+        await saveDocumentAsPsd(newDoc, job.file);
+      }, `產製 ${docName}`);
     } catch (error) {
       errors.push(`${job.fileName}：${error.message || error}`);
     }
@@ -2382,10 +2453,26 @@ async function readLayerBoundsByIds(docId, layerId) {
       return null;
     }
     return {
-      left: unitNumber(bounds.left && bounds.left._value != null ? bounds.left._value : bounds.left),
-      top: unitNumber(bounds.top && bounds.top._value != null ? bounds.top._value : bounds.top),
-      right: unitNumber(bounds.right && bounds.right._value != null ? bounds.right._value : bounds.right),
-      bottom: unitNumber(bounds.bottom && bounds.bottom._value != null ? bounds.bottom._value : bounds.bottom),
+      left: unitNumber(
+        bounds.left && bounds.left._value != null
+          ? bounds.left._value
+          : bounds.left,
+      ),
+      top: unitNumber(
+        bounds.top && bounds.top._value != null
+          ? bounds.top._value
+          : bounds.top,
+      ),
+      right: unitNumber(
+        bounds.right && bounds.right._value != null
+          ? bounds.right._value
+          : bounds.right,
+      ),
+      bottom: unitNumber(
+        bounds.bottom && bounds.bottom._value != null
+          ? bounds.bottom._value
+          : bounds.bottom,
+      ),
     };
   } catch (_error) {
     return null;
@@ -2413,7 +2500,9 @@ async function exportLayerPreviewPng(master, layer, file, name, prepare) {
       listLayers(temp).find((item) => !baseIds.has(item.id)) ||
       null;
     if (!copy) {
-      throw new Error(`${name} 複製失敗（若正在編輯文字，請先按 Enter 或 Esc 結束編輯）`);
+      throw new Error(
+        `${name} 複製失敗（若正在編輯文字，請先按 Enter 或 Esc 結束編輯）`,
+      );
     }
     try {
       copy.visible = true;
@@ -2479,17 +2568,19 @@ function closeLeftoverPreviewDocuments() {
       leftovers.push(app.documents[i]);
     }
   }
-  return Promise.all(
-    leftovers.map((doc) => closeDocumentQuietly(doc)),
-  );
+  return Promise.all(leftovers.map((doc) => closeDocumentQuietly(doc)));
 }
 
-async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+async function buildPreviewCache(
+  master,
+  required = MCD_SMART_LAYER_NAMES,
+  names = MCD_SMART_LAYER_NAMES,
+) {
   const sourceContainer = getMcdSourceContainer(master, required, names);
   const sourceLayers = requireMcdSmartLayers(sourceContainer, required, names);
   const presentNames = Object.keys(sourceLayers);
-  const order = listMcdLayersBottomToTop(sourceContainer, sourceLayers).map((layer) =>
-    presentNames.find((name) => sourceLayers[name].id === layer.id),
+  const order = listMcdLayersBottomToTop(sourceContainer, sourceLayers).map(
+    (layer) => presentNames.find((name) => sourceLayers[name].id === layer.id),
   );
 
   const tempFolder = await localFileSystem.getTemporaryFolder();
@@ -2498,31 +2589,33 @@ async function buildPreviewCache(master, required = MCD_SMART_LAYER_NAMES, names
   const failed = [];
   let firstError = null;
 
-  await runModal(
-    async () => {
-      await closeLeftoverPreviewDocuments();
-      for (const name of presentNames) {
-        try {
-          // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
-          const file = await tempFolder.createFile(
-            `preview-${master.id}-${presentNames.indexOf(name)}.png`,
-            { overwrite: true },
-          );
-          const size = await exportLayerPreviewPng(master, sourceLayers[name], file, name);
-          const buffer = await file.read({ format: formats.binary });
-          images[name] = {
-            ...size,
-            dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
-          };
-        } catch (error) {
-          firstError = firstError || error;
-          failed.push(`${name}：${error.message || error}`);
-        }
+  await runModal(async () => {
+    await closeLeftoverPreviewDocuments();
+    for (const name of presentNames) {
+      try {
+        // 檔名帶母版 id，避免兩份母版同時擷取時互相覆寫
+        const file = await tempFolder.createFile(
+          `preview-${master.id}-${presentNames.indexOf(name)}.png`,
+          { overwrite: true },
+        );
+        const size = await exportLayerPreviewPng(
+          master,
+          sourceLayers[name],
+          file,
+          name,
+        );
+        const buffer = await file.read({ format: formats.binary });
+        images[name] = {
+          ...size,
+          dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
+        };
+      } catch (error) {
+        firstError = firstError || error;
+        failed.push(`${name}：${error.message || error}`);
       }
-      app.activeDocument = master;
-    },
-    "擷取預覽圖層",
-  );
+    }
+    app.activeDocument = master;
+  }, "擷取預覽圖層");
 
   if (!Object.keys(images).length) {
     throw firstError || new Error("沒有可預覽的圖層");
@@ -2548,13 +2641,20 @@ async function whilePhotoshopBusy(task) {
 // 兩個分頁共用同一份擷取結果，避免同一份母版重複匯出
 const previewCacheByMaster = new Map();
 
-function getPreviewCache(master, force, required, names = MCD_SMART_LAYER_NAMES) {
+function getPreviewCache(
+  master,
+  force,
+  required,
+  names = MCD_SMART_LAYER_NAMES,
+) {
   // 套圖的圖層清單可自訂，依圖層清單分開快取
   const key = `${master.id}|${names.slice().sort().join("|")}`;
   if (!force && previewCacheByMaster.has(key)) {
     return previewCacheByMaster.get(key);
   }
-  const pending = whilePhotoshopBusy(() => buildPreviewCache(master, required, names)).catch((error) => {
+  const pending = whilePhotoshopBusy(() =>
+    buildPreviewCache(master, required, names),
+  ).catch((error) => {
     previewCacheByMaster.delete(key);
     throw error;
   });
@@ -2664,9 +2764,11 @@ function startLoading(message) {
   const dialog = document.getElementById("loading-dialog");
   const state = { shown: false, closed: false, frame: 0, percent: 0, message };
   const render = () => {
-    document.getElementById("loading-spinner").textContent = SPINNER_FRAMES[state.frame % SPINNER_FRAMES.length];
+    document.getElementById("loading-spinner").textContent =
+      SPINNER_FRAMES[state.frame % SPINNER_FRAMES.length];
     document.getElementById("loading-text").textContent = state.message;
-    document.getElementById("loading-percent").textContent = `${Math.round(state.percent)}%`;
+    document.getElementById("loading-percent").textContent =
+      `${Math.round(state.percent)}%`;
     document.getElementById("loading-bar").style.width = `${state.percent}%`;
   };
   const showTimer = setTimeout(() => {
@@ -2952,7 +3054,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function refreshExtraNames() {
     try {
-      state.extraNames = isDocumentOpen(state.master) ? dollarLayerNames(state.master) : [];
+      state.extraNames = isDocumentOpen(state.master)
+        ? dollarLayerNames(state.master)
+        : [];
     } catch (_error) {
       state.extraNames = [];
     }
@@ -3060,7 +3164,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.overrideImages[key] = { pending: true };
     const master = state.master;
     whilePhotoshopBusy(() =>
-      buildTextOverridePreview(master, name, mode.required(), layerNames(), override),
+      buildTextOverridePreview(
+        master,
+        name,
+        mode.required(),
+        layerNames(),
+        override,
+      ),
     )
       .then((image) => {
         state.overrideImages[key] = { image };
@@ -3106,7 +3216,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const master = state.master;
       setStatus(`產生 ${name} 旋轉 ${rotation} 度的預覽中…`);
       whilePhotoshopBusy(() =>
-        buildRotatedPreview(master, name, mode.required(), layerNames(), rotation, override),
+        buildRotatedPreview(
+          master,
+          name,
+          mode.required(),
+          layerNames(),
+          rotation,
+          override,
+        ),
       )
         .then((image) => {
           state.rotatedImages[key] = { image: { ...image, rotation } };
@@ -3133,7 +3250,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function currentVariant() {
     const template = currentTemplate();
-    return template ? template.values.variants[state.variantIndex] || null : null;
+    return template
+      ? template.values.variants[state.variantIndex] || null
+      : null;
   }
 
   function coverSpec() {
@@ -3143,7 +3262,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return { leftPercent: 0, topPercent: 0, widthPercent: 100 };
     }
     const canvas = canvasSize();
-    const scale = Math.max(canvas.width / info.width, canvas.height / info.height);
+    const scale = Math.max(
+      canvas.width / info.width,
+      canvas.height / info.height,
+    );
     const w = info.width * scale;
     const h = info.height * scale;
     return {
@@ -3178,7 +3300,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         if (!measured) {
           measured = measuredSpecs();
         }
-        variant.elements[name] = measured[name] ? deepClone(measured[name]) : defaultSpecFor(name);
+        variant.elements[name] = measured[name]
+          ? deepClone(measured[name])
+          : defaultSpecFor(name);
       }
     }
   }
@@ -3191,7 +3315,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       if (isApply) {
         return mode.initialValues(state.master).variants[0].elements;
       }
-      const { frames } = measureLayerFrames(state.master, mode.required(), layerNames());
+      const { frames } = measureLayerFrames(
+        state.master,
+        mode.required(),
+        layerNames(),
+      );
       const out = {};
       Object.keys(frames).forEach((name) => {
         out[name] = {
@@ -3229,7 +3357,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function clampSelection() {
     const count = templates().length;
     if (state.templateIndex >= 0) {
-      state.templateIndex = count ? Math.min(state.templateIndex, count - 1) : -1;
+      state.templateIndex = count
+        ? Math.min(state.templateIndex, count - 1)
+        : -1;
     }
     const template = currentTemplate();
     const editable = editableNames();
@@ -3290,7 +3420,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function coveredBackgroundSpec(spec) {
     const ratio = heightRatio("$BG");
     if (!ratio) {
-      return { leftPercent: spec.leftPercent, topPercent: spec.topPercent, widthPercent: spec.widthPercent };
+      return {
+        leftPercent: spec.leftPercent,
+        topPercent: spec.topPercent,
+        widthPercent: spec.widthPercent,
+      };
     }
     const rect = fitInFrame("$BG", spec, ratio);
     return {
@@ -3315,7 +3449,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     updateIndependentCheck();
     const rawSpec = currentSpec();
     const spec =
-      rawSpec && state.elementName === "$BG" ? coveredBackgroundSpec(rawSpec) : rawSpec;
+      rawSpec && state.elementName === "$BG"
+        ? coveredBackgroundSpec(rawSpec)
+        : rawSpec;
     if (!spec) {
       for (const key of FIELD_KEYS) {
         fields[key].value = "";
@@ -3361,7 +3497,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const input = fields[key];
     if (key === "rotation") {
       const current = parseFloat(input.value);
-      input.value = String(normalizeAngle((Number.isFinite(current) ? current : 0) + direction * ROTATION_STEP));
+      input.value = String(
+        normalizeAngle(
+          (Number.isFinite(current) ? current : 0) + direction * ROTATION_STEP,
+        ),
+      );
       return;
     }
     const current = parseFloat(input.value);
@@ -3390,11 +3530,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       entries.unshift({ label: EMPTY_TEMPLATE_LABEL, index: -1 });
     }
     state.templateEntries = entries;
-    fillPicker(templatePicker, entries.map((entry) => entry.label));
+    fillPicker(
+      templatePicker,
+      entries.map((entry) => entry.label),
+    );
     if (entries.length) {
       setPickerIndex(
         templatePicker,
-        Math.max(entries.findIndex((entry) => entry.index === state.templateIndex), 0),
+        Math.max(
+          entries.findIndex((entry) => entry.index === state.templateIndex),
+          0,
+        ),
       );
     }
     updateTemplateHint();
@@ -3411,7 +3557,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       : variants.map(variantLabel);
     fillPicker(variantPicker, labels);
     if (labels.length) {
-      setPickerIndex(variantPicker, isApply ? state.outputIndex : state.variantIndex);
+      setPickerIndex(
+        variantPicker,
+        isApply ? state.outputIndex : state.variantIndex,
+      );
     }
     updateVariantNameValidity();
   }
@@ -3503,7 +3652,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function frameHeightPercent(name, spec) {
-    return hasFrameHeight(spec) ? spec.heightPercent : naturalHeightPercent(name, spec);
+    return hasFrameHeight(spec)
+      ? spec.heightPercent
+      : naturalHeightPercent(name, spec);
   }
 
   function updateSelectionBox() {
@@ -3551,7 +3702,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         ? [
             [spec.leftPercent, spec.topPercent],
             [spec.leftPercent + spec.widthPercent, spec.topPercent],
-            [spec.leftPercent + spec.widthPercent, spec.topPercent + heightPercent],
+            [
+              spec.leftPercent + spec.widthPercent,
+              spec.topPercent + heightPercent,
+            ],
             [spec.leftPercent, spec.topPercent + heightPercent],
           ].map(([x, y]) => turn((x / 100) * stageW, (y / 100) * stageH))
         : [],
@@ -3600,7 +3754,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const length = Math.hypot(to.x - from.x, to.y - from.y);
       const steps = Math.max(1, Math.floor(length / OUTLINE_DOT_GAP));
       for (let k = 0; k < steps; k++) {
-        points.push({ x: from.x + ((to.x - from.x) * k) / steps, y: from.y + ((to.y - from.y) * k) / steps });
+        points.push({
+          x: from.x + ((to.x - from.x) * k) / steps,
+          y: from.y + ((to.y - from.y) * k) / steps,
+        });
       }
     });
     const shown = points.slice(0, OUTLINE_MAX_DOTS);
@@ -3629,7 +3786,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const ratio = heightRatio(name);
     const rect = ratio
       ? fitInFrame(name, spec, ratio)
-      : { left: spec.leftPercent, top: spec.topPercent, width: spec.widthPercent, height: 0 };
+      : {
+          left: spec.leftPercent,
+          top: spec.topPercent,
+          width: spec.widthPercent,
+          height: 0,
+        };
     return {
       x: ((rect.left + rect.width / 2) / 100) * stage.clientWidth,
       y: ((rect.top + rect.height / 2) / 100) * stage.clientHeight,
@@ -3659,7 +3821,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function resizeStage() {
     const canvas = canvasSize();
     const available =
-      (stage.parentElement && stage.parentElement.clientWidth) || stage.clientWidth;
+      (stage.parentElement && stage.parentElement.clientWidth) ||
+      stage.clientWidth;
     let width = available;
     let height = (available * canvas.height) / canvas.width;
     if (height > available) {
@@ -3762,7 +3925,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   const LAYER_MOVES = {
-    front: (order, i) => [...order.slice(0, i), ...order.slice(i + 1), order[i]],
+    front: (order, i) => [
+      ...order.slice(0, i),
+      ...order.slice(i + 1),
+      order[i],
+    ],
     back: (order, i) => [order[i], ...order.slice(0, i), ...order.slice(i + 1)],
     forward: (order, i) => swapAt(order, i, i + 1),
     backward: (order, i) => swapAt(order, i, i - 1),
@@ -3789,7 +3956,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     variant.order = next;
     applyLayerOrder();
     const position = next.length - next.indexOf(name);
-    setStatus(`${name} 目前在第 ${position} 層（由上往下數），按「儲存設定值」保存。`);
+    setStatus(
+      `${name} 目前在第 ${position} 層（由上往下數），按「儲存設定值」保存。`,
+    );
   }
 
   /**
@@ -3809,8 +3978,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     // 勾選「獨立」的樣板自己設定，不跟其他樣板同步
     if (isIndependentVariant(source)) {
-      setStatus(`「${variantLabel(source)}」是獨立樣板，不與其他樣板同步圖層大小。`);
-      await app.showAlert(`「${variantLabel(source)}」勾選了「獨立」，大小自己設定，不會同步到其他樣板。`);
+      setStatus(
+        `「${variantLabel(source)}」是獨立樣板，不與其他樣板同步圖層大小。`,
+      );
+      await app.showAlert(
+        `「${variantLabel(source)}」勾選了「獨立」，大小自己設定，不會同步到其他樣板。`,
+      );
       return;
     }
     const targets = template.values.variants.filter(
@@ -3858,7 +4031,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       applyExtras.variantForSet(set);
     }
     if (!template.values.variants.some((variant) => variant !== source)) {
-      await app.showAlert("目前沒有其他套圖可以同步。請先在「圖檔 src」選擇放有套圖圖檔的資料夾。");
+      await app.showAlert(
+        "目前沒有其他套圖可以同步。請先在「圖檔 src」選擇放有套圖圖檔的資料夾。",
+      );
       return;
     }
     if (!(await showDialog(el("sync-dialog"), "同步圖層"))) {
@@ -4052,7 +4227,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     actions.appendChild(confirm);
     box.appendChild(actions);
 
-    state.textEditor = { name, master: state.master, texts, inputs, box, variant: variant || null };
+    state.textEditor = {
+      name,
+      master: state.master,
+      texts,
+      inputs,
+      box,
+      variant: variant || null,
+    };
     // 放在預覽區裡會被圖層圖片蓋住（UXP 的 z-index 不可靠）：
     // 跟「套圖圖層」下拉一樣移到分頁最後，再依預覽區位置擺到圖層旁邊
     root.appendChild(box);
@@ -4071,8 +4253,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function insertLineBreak(input) {
     const value = input.value;
-    const start = Number.isFinite(input.selectionStart) ? input.selectionStart : value.length;
-    const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : start;
+    const start = Number.isFinite(input.selectionStart)
+      ? input.selectionStart
+      : value.length;
+    const end = Number.isFinite(input.selectionEnd)
+      ? input.selectionEnd
+      : start;
     input.value = `${value.slice(0, start)}\n${value.slice(end)}`;
     try {
       input.selectionStart = input.selectionEnd = start + 1;
@@ -4091,7 +4277,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     // 寬度依面板（不是預覽區）：直式版面的預覽很窄，按鈕才不會擠出框外
     const rootW = rootRect.width || root.clientWidth || stageW;
     const width = Math.min(Math.max(rootW * 0.5, 280), rootW);
-    const left = stageRect.left - rootRect.left + (stageW * position.left) / 100;
+    const left =
+      stageRect.left - rootRect.left + (stageW * position.left) / 100;
     box.style.left = `${clampNumber(left, 0, Math.max(rootW - width, 0))}px`;
     box.style.top = `${stageRect.top - rootRect.top + (stageH * position.top) / 100}px`;
     box.style.width = `${width}px`;
@@ -4105,7 +4292,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const changed = editor.inputs.some(
       (input, i) =>
-        input.value.replace(/\r\n?|\n/g, "\r") !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
+        input.value.replace(/\r\n?|\n/g, "\r") !==
+        editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
     );
     if (changed) {
       await confirmTextEditor();
@@ -4136,7 +4324,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     let psdTexts;
     try {
       psdTexts = (
-        await whilePhotoshopBusy(() => readEditableTexts(master, name, mode.required(), layerNames()))
+        await whilePhotoshopBusy(() =>
+          readEditableTexts(master, name, mode.required(), layerNames()),
+        )
       ).map((item) => item.text);
     } catch (error) {
       setStatus(`無法讀取 ${name} 的文字：${describeModalError(error)}`);
@@ -4144,7 +4334,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const variant = verticalVariant();
     const own = textOverrideOf(variant, name, false);
-    const current = (own && own.style && own.style.orientation) || style.orientation || "horizontal";
+    const current =
+      (own && own.style && own.style.orientation) ||
+      style.orientation ||
+      "horizontal";
     const next = current === "vertical" ? "horizontal" : "vertical";
     const label = next === "vertical" ? "直排" : "橫排";
     // 直排：半形數字／英文轉全形才會直立；橫排：換回半形
@@ -4153,22 +4346,34 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       // 獨立樣板：方向與文字存在這個樣板，不改 PSD
       const override = textOverrideOf(variant, name, true);
       const base =
-        override.texts && override.texts.length === psdTexts.length ? override.texts : psdTexts;
+        override.texts && override.texts.length === psdTexts.length
+          ? override.texts
+          : psdTexts;
       override.texts = base.map(convert);
       override.style = { ...(override.style || {}), orientation: next };
       renderPreview();
-      await saveOverride(`已將「${variantLabel(variant)}」的 ${name} 改為${label}`);
+      await saveOverride(
+        `已將「${variantLabel(variant)}」的 ${name} 改為${label}`,
+      );
       return;
     }
     // 共用樣板要改 PSD：獨立樣板先記下原本的樣式與文字
     const frozen =
-      freezeIndependent(name, "style", style) + freezeIndependent(name, "texts", psdTexts);
+      freezeIndependent(name, "style", style) +
+      freezeIndependent(name, "texts", psdTexts);
     setStatus(`將 ${name} 改為${label}並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
-        writeTextsAndStyle(master, name, mode.required(), layerNames(), psdTexts.map(convert), {
-          orientation: next,
-        }),
+        writeTextsAndStyle(
+          master,
+          name,
+          mode.required(),
+          layerNames(),
+          psdTexts.map(convert),
+          {
+            orientation: next,
+          },
+        ),
       );
     } catch (error) {
       setStatus(`轉向失敗：${describeModalError(error)}`);
@@ -4193,7 +4398,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const changed = editor.inputs.some(
       (input, i) =>
-        input.value.replace(/\r\n?|\n/g, "\r") !== editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
+        input.value.replace(/\r\n?|\n/g, "\r") !==
+        editor.texts[i].text.replace(/\r\n?|\n/g, "\r"),
     );
     if (changed) {
       await confirmTextEditor();
@@ -4217,7 +4423,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!editor || !editor.inputs || editor.saving) {
       return;
     }
-    const values = editor.inputs.map((input) => input.value.replace(/\r\n?|\n/g, "\r"));
+    const values = editor.inputs.map((input) =>
+      input.value.replace(/\r\n?|\n/g, "\r"),
+    );
     if (editor.variant) {
       // 獨立樣板：文字存在這個樣板（module.json），不改 PSD
       textOverrideOf(editor.variant, editor.name, true).texts = values;
@@ -4226,7 +4434,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
       state.textEditor = null;
       renderPreview();
-      await saveOverride(`已更新「${variantLabel(editor.variant)}」自己的 ${editor.name} 文字`);
+      await saveOverride(
+        `已更新「${variantLabel(editor.variant)}」自己的 ${editor.name} 文字`,
+      );
       return;
     }
     // 共用樣板要改 PSD 了：還沒有自己文字的獨立樣板先記下「改之前」的文字，不被這次修改影響
@@ -4244,7 +4454,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     setStatus(`更新 ${editor.name} 的文字並存檔中…`);
     try {
       await whilePhotoshopBusy(() =>
-        writeEditableTexts(editor.master, editor.name, mode.required(), layerNames(), values),
+        writeEditableTexts(
+          editor.master,
+          editor.name,
+          mode.required(),
+          layerNames(),
+          values,
+        ),
       );
     } catch (error) {
       state.textEditor = null;
@@ -4320,7 +4536,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       line.className = `preview-grid-line ${vertical ? "is-vertical" : "is-horizontal"}`;
       line.style[vertical ? "left" : "top"] = `${percent}%`;
       // 在所有圖層之上（與選取框同層、排在它前面，選取框和控制點仍在最上面）
-      line.style.zIndex = anchor ? anchor.style.zIndex : String(state.previewCache.order.length + 1);
+      line.style.zIndex = anchor
+        ? anchor.style.zIndex
+        : String(state.previewCache.order.length + 1);
       if (anchor) {
         stage.insertBefore(line, anchor);
       } else {
@@ -4369,7 +4587,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     writeGridSettings({ ...readGridSettings(), ...gridDraft });
     renderGrid();
-    setStatus(`格線：直 ${gridDraft.vertical} 條、橫 ${gridDraft.horizontal} 條`);
+    setStatus(
+      `格線：直 ${gridDraft.vertical} 條、橫 ${gridDraft.horizontal} 條`,
+    );
     await showToast("已儲存格線設定");
   }
 
@@ -4391,14 +4611,23 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       setStatus(EMPTY_STATUS);
       return;
     }
-    if (!force && state.previewCache && state.previewCache.masterId === master.id) {
+    if (
+      !force &&
+      state.previewCache &&
+      state.previewCache.masterId === master.id
+    ) {
       renderPreview();
       return;
     }
 
     setStatus("擷取圖層中，請稍候…");
     try {
-      const cache = await getPreviewCache(master, force, mode.required(), layerNames());
+      const cache = await getPreviewCache(
+        master,
+        force,
+        mode.required(),
+        layerNames(),
+      );
       // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
       if (!state.master || state.master.id !== master.id) {
         return; // 擷取期間已切換母版
@@ -4463,7 +4692,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function pointerAngle(drag, event) {
-    return (Math.atan2(event.clientY - drag.pivotY, event.clientX - drag.pivotX) * 180) / Math.PI;
+    return (
+      (Math.atan2(event.clientY - drag.pivotY, event.clientX - drag.pivotX) *
+        180) /
+      Math.PI
+    );
   }
 
   /**
@@ -4483,7 +4716,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (sx && sy) {
       const ratio = startHeight / Math.max(start.widthPercent, 0.01);
       const widthFromX = start.widthPercent + sx * dxPercent;
-      const widthFromY = ratio ? (startHeight + sy * dyPercent) / ratio : widthFromX;
+      const widthFromY = ratio
+        ? (startHeight + sy * dyPercent) / ratio
+        : widthFromX;
       const useX =
         Math.abs(widthFromX - start.widthPercent) >=
         Math.abs(widthFromY - start.widthPercent);
@@ -4497,8 +4732,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     const next = {
       ...start,
-      leftPercent: sx < 0 ? start.leftPercent + (start.widthPercent - width) : start.leftPercent,
-      topPercent: sy < 0 ? start.topPercent + (startHeight - height) : start.topPercent,
+      leftPercent:
+        sx < 0
+          ? start.leftPercent + (start.widthPercent - width)
+          : start.leftPercent,
+      topPercent:
+        sy < 0 ? start.topPercent + (startHeight - height) : start.topPercent,
       widthPercent: width,
     };
     if (hasFrameHeight(start) || (sy && !sx)) {
@@ -4514,16 +4753,24 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const dxPercent = ((event.clientX - drag.startX) / drag.stageW) * 100;
     const dyPercent = ((event.clientY - drag.startY) / drag.stageH) * 100;
-    if (Math.abs(event.clientX - drag.startX) > 2 || Math.abs(event.clientY - drag.startY) > 2) {
+    if (
+      Math.abs(event.clientX - drag.startX) > 2 ||
+      Math.abs(event.clientY - drag.startY) > 2
+    ) {
       drag.moved = true;
     }
 
     if (drag.mode === "rotate") {
-      let angle = (drag.start.rotation || 0) + pointerAngle(drag, event) - drag.startAngle;
+      let angle =
+        (drag.start.rotation || 0) +
+        pointerAngle(drag, event) -
+        drag.startAngle;
       if (event.shiftKey) {
         angle = Math.round(angle / ROTATION_SNAP) * ROTATION_SNAP;
       }
-      fields.rotation.value = String(normalizeAngle(Math.round(angle * 10) / 10));
+      fields.rotation.value = String(
+        normalizeAngle(Math.round(angle * 10) / 10),
+      );
     } else if (state.elementName === "$BG") {
       // 背景拖拉／縮放時即時夾在滿版範圍內（可為負值，但不會露出白邊）
       const next =
@@ -4536,7 +4783,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
           : resizeSpecFromDrag(drag, dxPercent, dyPercent);
       writeFields(coveredBackgroundSpec(next));
     } else if (drag.mode === "move") {
-      fields.leftPercent.value = roundPercent(drag.start.leftPercent + dxPercent);
+      fields.leftPercent.value = roundPercent(
+        drag.start.leftPercent + dxPercent,
+      );
       fields.topPercent.value = roundPercent(drag.start.topPercent + dyPercent);
     } else {
       writeFields(resizeSpecFromDrag(drag, dxPercent, dyPercent));
@@ -4604,7 +4853,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 文字樣式（圖層旁的「編輯」） -----
 
-  const textStyle = { fonts: null, families: [], familiesKey: "", styles: [], pickedFamily: "", align: "left", missing: "" };
+  const textStyle = {
+    fonts: null,
+    families: [],
+    familiesKey: "",
+    styles: [],
+    pickedFamily: "",
+    align: "left",
+    missing: "",
+  };
   let canvasSizeDraft = null;
 
   // 樣式列出 100～900 全部粗細：字型有的可以選，沒有的變灰（Photoshop 做不出字型沒有的粗細）
@@ -4619,7 +4876,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const labels = [];
     if (available.length) {
       FONT_WEIGHTS.forEach(([weight, name]) => {
-        const matches = available.filter((style) => fontWeightOf(style) === weight);
+        const matches = available.filter(
+          (style) => fontWeightOf(style) === weight,
+        );
         if (matches.length) {
           matches.forEach((style) => {
             styles.push(style);
@@ -4648,7 +4907,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       index = styles.indexOf("Regular");
     }
     if (index < 0) {
-      index = Math.max(styles.findIndex((style) => style !== null), 0);
+      index = Math.max(
+        styles.findIndex((style) => style !== null),
+        0,
+      );
     }
     setPickerIndex(picker, index);
     return available;
@@ -4658,12 +4920,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function pickedFontStyle() {
     const index = el("text-font-style").selectedIndex;
     const style = textStyle.styles[index];
-    if (style || !textStyle.availableStyles || !textStyle.availableStyles.length) {
+    if (
+      style ||
+      !textStyle.availableStyles ||
+      !textStyle.availableStyles.length
+    ) {
       return style || "";
     }
     const target = textStyle.styleWeights[index] || 400;
     return textStyle.availableStyles.reduce((best, s) =>
-      Math.abs(fontWeightOf(s) - target) < Math.abs(fontWeightOf(best) - target) ? s : best,
+      Math.abs(fontWeightOf(s) - target) < Math.abs(fontWeightOf(best) - target)
+        ? s
+        : best,
     );
   }
 
@@ -4678,10 +4946,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function updateColorSwatch() {
     const value = el("text-color").value.trim();
     const parsed = parseColor(value);
-    el("text-color-swatch").style.background = parsed ? parsed.hex : "transparent";
+    el("text-color-swatch").style.background = parsed
+      ? parsed.hex
+      : "transparent";
     let hint = "";
     if (!parsed) {
-      hint = value ? "看不懂這個顏色，可輸入 #RGB、#RRGGBB、rgb()、rgba()、hsl()、hsla()、hsb()" : "";
+      hint = value
+        ? "看不懂這個顏色，可輸入 #RGB、#RRGGBB、rgb()、rgba()、hsl()、hsla()、hsb()"
+        : "";
     } else if (parsed.alpha < 1) {
       hint = `會套用 ${parsed.hex}（Photoshop 文字顏色沒有透明度，透明度會忽略）`;
     } else if (parsed.hex.toLowerCase() !== value.toLowerCase()) {
@@ -4701,7 +4973,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     textStyle.swatchClick = 0;
     textStyle.picking = true;
     try {
-      const picked = await whilePhotoshopBusy(() => pickColorInPhotoshop(el("text-color").value.trim()));
+      const picked = await whilePhotoshopBusy(() =>
+        pickColorInPhotoshop(el("text-color").value.trim()),
+      );
       if (picked) {
         el("text-color").value = picked;
         updateColorSwatch();
@@ -4733,7 +5007,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     el("canvas-size-error").textContent = "";
     showCanvasSizeView(false);
     canvasSizeDraft = null;
-    if (!(await showDialog(el("canvas-size-dialog"), `調整版面尺寸：${variantLabel(variant)}`))) {
+    if (
+      !(await showDialog(
+        el("canvas-size-dialog"),
+        `調整版面尺寸：${variantLabel(variant)}`,
+      ))
+    ) {
       return;
     }
     if (!canvasSizeDraft || currentVariant() !== variant) {
@@ -4756,7 +5035,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     const height = Number(el("canvas-height").value.trim());
     const valid = (n) => Number.isInteger(n) && n >= 1 && n <= MAX_CANVAS_SIZE;
     if (!valid(width) || !valid(height)) {
-      el("canvas-size-error").textContent = `寬度與高度請輸入 1～${MAX_CANVAS_SIZE} 的整數（像素）`;
+      el("canvas-size-error").textContent =
+        `寬度與高度請輸入 1～${MAX_CANVAS_SIZE} 的整數（像素）`;
       return null;
     }
     return { width, height };
@@ -4779,7 +5059,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       );
       loading.update(10, "載入字型清單…");
       // 字型清單只讀一次（兩個分頁共用），第一次讀會比較久
-      textStyle.fonts = textStyle.fonts || (await loadFonts((ratio) => loading.update(10 + ratio * 80)));
+      textStyle.fonts =
+        textStyle.fonts ||
+        (await loadFonts((ratio) => loading.update(10 + ratio * 80)));
       loading.update(90, "建立選單…");
     } catch (error) {
       await loading.done();
@@ -4790,7 +5072,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!style) {
       await loading.done();
       setStatus(`${name} 沒有文字`);
-      await app.showAlert(`${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`);
+      await app.showAlert(
+        `${name} 不是文字，請在「圖層」選擇文字圖層（例如 $SM、$TEXT1）。`,
+      );
       return;
     }
     const psdStyle = { ...style };
@@ -4803,21 +5087,29 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     // 字型清單：目前字型找不到時（缺字型）放在第一項，代表維持不變
     if (!textStyle.sortedFamilies) {
-      textStyle.sortedFamilies = [...new Set(textStyle.fonts.map((font) => font.family))].sort((a, b) =>
-        a.localeCompare(b),
-      );
+      textStyle.sortedFamilies = [
+        ...new Set(textStyle.fonts.map((font) => font.family)),
+      ].sort((a, b) => a.localeCompare(b));
     }
     const families = textStyle.sortedFamilies;
-    const current = textStyle.fonts.find((font) => font.postScriptName === style.font) || null;
+    const current =
+      textStyle.fonts.find((font) => font.postScriptName === style.font) ||
+      null;
     textStyle.missing = current ? "" : style.font;
-    textStyle.families = textStyle.missing ? [`（目前字型）${style.font || "未知"}`, ...families] : families;
+    textStyle.families = textStyle.missing
+      ? [`（目前字型）${style.font || "未知"}`, ...families]
+      : families;
     // 字型很多時重建選單很慢：清單沒變就沿用
-    const familiesKey = textStyle.missing ? `missing:${textStyle.missing}` : "all";
+    const familiesKey = textStyle.missing
+      ? `missing:${textStyle.missing}`
+      : "all";
     if (textStyle.familiesKey !== familiesKey) {
       fillPicker(el("text-font-family"), textStyle.families);
       textStyle.familiesKey = familiesKey;
     }
-    const familyIndex = current ? textStyle.families.indexOf(current.family) : 0;
+    const familyIndex = current
+      ? textStyle.families.indexOf(current.family)
+      : 0;
     setPickerIndex(el("text-font-family"), Math.max(familyIndex, 0));
     textStyle.pickedFamily = current ? current.family : "";
     fillFontStyles(textStyle.pickedFamily, current ? current.style : "");
@@ -4841,13 +5133,17 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     if (!color) {
-      await app.showAlert("看不懂這個顏色，例如 #000000、#000、rgb(0, 0, 0)、rgba(0, 0, 0, 1)、hsl(0, 0%, 0%)。");
+      await app.showAlert(
+        "看不懂這個顏色，例如 #000000、#000、rgb(0, 0, 0)、rgba(0, 0, 0, 1)、hsl(0, 0%, 0%)。",
+      );
       return;
     }
     const familyIndex2 = el("text-font-family").selectedIndex;
     const styleName = pickedFontStyle();
     const family = textStyle.families[familyIndex2];
-    const picked = textStyle.fonts.find((font) => font.family === family && font.style === styleName);
+    const picked = textStyle.fonts.find(
+      (font) => font.family === family && font.style === styleName,
+    );
     const next = {
       font: picked ? picked.postScriptName : "",
       size,
@@ -4866,7 +5162,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         delete override.style.font;
       }
       renderPreview();
-      await saveOverride(`已更新「${variantLabel(variant)}」自己的 ${name} 文字樣式`);
+      await saveOverride(
+        `已更新「${variantLabel(variant)}」自己的 ${name} 文字樣式`,
+      );
       return;
     }
     // 共用樣板要改 PSD：還沒有自己樣式的獨立樣板先記下改之前的樣式
@@ -4916,7 +5214,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     // 同一份 PSD 的模組一併拿掉這個圖層的位置
     const path = readDocumentPath(master);
     const owners = templates().filter(
-      (template) => template === currentTemplate() || (template.source && path && template.source.path === path),
+      (template) =>
+        template === currentTemplate() ||
+        (template.source && path && template.source.path === path),
     );
     if (state.draft) {
       owners.push(state.draft);
@@ -4960,7 +5260,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     let name;
     try {
       name = await whilePhotoshopBusy(() =>
-        addTextLayerToMaster(master, mode.required(), layerNames(), DEFAULT_NEW_TEXT),
+        addTextLayerToMaster(
+          master,
+          mode.required(),
+          layerNames(),
+          DEFAULT_NEW_TEXT,
+        ),
       );
     } catch (error) {
       setStatus(`新增文字失敗：${describeModalError(error)}`);
@@ -5093,7 +5398,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     try {
       // 記住這份 PSD 的授權，之後選它的模組時可以直接重新開啟
-      rememberSrcFolder(file.nativePath, await localFileSystem.createPersistentToken(file));
+      rememberSrcFolder(
+        file.nativePath,
+        await localFileSystem.createPersistentToken(file),
+      );
     } catch (_error) {
       // 記不住就等下次再上傳
     }
@@ -5145,7 +5453,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     commitFields();
     // 有這份 PSD 的草稿就照畫面上的草稿存；否則用內建樣板、寬度依基準換算
-    const draft = state.draft && state.draft.draftFor === state.master.id ? state.draft : null;
+    const draft =
+      state.draft && state.draft.draftFor === state.master.id
+        ? state.draft
+        : null;
     const values = draft ? draft.values : mode.initialValues(state.master);
     const variantIndex = draft && isDraftSelected() ? state.variantIndex : 0;
     state.draft = null;
@@ -5157,7 +5468,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       },
       values,
       ...(isApply
-        ? { layers: draft ? draft.layers : [], srcPath: draft ? draft.srcPath : "" }
+        ? {
+            layers: draft ? draft.layers : [],
+            srcPath: draft ? draft.srcPath : "",
+          }
         : {}),
     });
     state.templateIndex = templates().length - 1;
@@ -5184,7 +5498,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const variants = template.values.variants;
-    if (variants.some((variant) => isSameVariantName(variant.outputDocument || "", name))) {
+    if (
+      variants.some((variant) =>
+        isSameVariantName(variant.outputDocument || "", name),
+      )
+    ) {
       variantNameInput.classList.add("is-invalid");
       setStatus(`版型「${name}」已存在。`);
       return;
@@ -5232,8 +5550,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     const elements = deepClone(match.elements);
     delete elements.$BG;
-    const doc = template === state.draft ? state.master : findOpenDocumentForTemplate(template);
-    return template.builtin ? elements : scaleElementsForDocument(elements, doc);
+    const doc =
+      template === state.draft
+        ? state.master
+        : findOpenDocumentForTemplate(template);
+    return template.builtin
+      ? elements
+      : scaleElementsForDocument(elements, doc);
   }
 
   async function resetVariant() {
@@ -5255,63 +5578,75 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
   }
 
+  const variantManager = createListManager(
+    {
+      prefix: "variant-manager",
+      title: "編輯 Resize 樣板",
+      emptyLabel: "（未命名版型）",
+      listItems: () =>
+        currentTemplate() ? currentTemplate().values.variants : [],
+      getName: (variant) => variant.outputDocument,
+      setName: (variant, name) => {
+        variant.outputDocument = name;
+      },
+      isSameName: isSameVariantName,
+      remove: (variant) => {
+        const variants = currentTemplate().values.variants;
+        const index = variants.indexOf(variant);
+        if (index < 0) {
+          return;
+        }
+        variants.splice(index, 1);
+        if (
+          state.variantIndex > index ||
+          state.variantIndex >= variants.length
+        ) {
+          state.variantIndex = Math.max(state.variantIndex - 1, 0);
+        }
+      },
+      afterChange: () => {
+        clampSelection();
+        renderVariantPicker();
+        loadFields();
+        renderPreview();
+      },
+      deletedMessage: (variant) => `已刪除樣板「${variantLabel(variant)}」`,
+    },
+    { el, beforeOpen: commitFields, persist },
+  );
 
-  const variantManager = createListManager({
-    prefix: "variant-manager",
-    title: "編輯 Resize 樣板",
-    emptyLabel: "（未命名版型）",
-    listItems: () => (currentTemplate() ? currentTemplate().values.variants : []),
-    getName: (variant) => variant.outputDocument,
-    setName: (variant, name) => {
-      variant.outputDocument = name;
+  const templateManager = createListManager(
+    {
+      prefix: "template-manager",
+      title: "編輯模組",
+      emptyLabel: "（未命名模組）",
+      listItems: () => templates(),
+      getName: (template) => template.name,
+      setName: (template, name) => {
+        template.name = name;
+      },
+      isSameName: (a, b) => a === b,
+      // 「預設」模組是新模組複製的來源，不開放刪除（可改名）
+      canDelete: (template) => !template.builtin,
+      remove: (template) => {
+        const index = templates().indexOf(template);
+        if (index < 0) {
+          return;
+        }
+        templates().splice(index, 1);
+        if (
+          state.templateIndex > index ||
+          state.templateIndex >= templates().length
+        ) {
+          state.templateIndex = Math.max(state.templateIndex - 1, 0);
+          state.variantIndex = 0;
+        }
+      },
+      afterChange: renderAll,
+      deletedMessage: (template) => `已刪除模組「${template.name}」`,
     },
-    isSameName: isSameVariantName,
-    remove: (variant) => {
-      const variants = currentTemplate().values.variants;
-      const index = variants.indexOf(variant);
-      if (index < 0) {
-        return;
-      }
-      variants.splice(index, 1);
-      if (state.variantIndex > index || state.variantIndex >= variants.length) {
-        state.variantIndex = Math.max(state.variantIndex - 1, 0);
-      }
-    },
-    afterChange: () => {
-      clampSelection();
-      renderVariantPicker();
-      loadFields();
-      renderPreview();
-    },
-    deletedMessage: (variant) => `已刪除樣板「${variantLabel(variant)}」`,
-  }, { el, beforeOpen: commitFields, persist });
-
-  const templateManager = createListManager({
-    prefix: "template-manager",
-    title: "編輯模組",
-    emptyLabel: "（未命名模組）",
-    listItems: () => templates(),
-    getName: (template) => template.name,
-    setName: (template, name) => {
-      template.name = name;
-    },
-    isSameName: (a, b) => a === b,
-    // 「預設」模組是新模組複製的來源，不開放刪除（可改名）
-    canDelete: (template) => !template.builtin,
-    remove: (template) => {
-      const index = templates().indexOf(template);
-      if (index < 0) {
-        return;
-      }
-      templates().splice(index, 1);
-      if (state.templateIndex > index || state.templateIndex >= templates().length) {
-        state.templateIndex = Math.max(state.templateIndex - 1, 0);
-        state.variantIndex = 0;
-      }
-    },
-    afterChange: renderAll,
-    deletedMessage: (template) => `已刪除模組「${template.name}」`,
-  }, { el, beforeOpen: commitFields, persist });
+    { el, beforeOpen: commitFields, persist },
+  );
 
   // ----- 事件 -----
 
@@ -5363,7 +5698,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-upload-psd").addEventListener("click", uploadPsd);
   el("btn-add-template").addEventListener("click", addTemplate);
   el("btn-add-variant").addEventListener("click", addVariant);
-  el("btn-refresh-preview").addEventListener("click", () => refreshPreview(true));
+  el("btn-refresh-preview").addEventListener("click", () =>
+    refreshPreview(true),
+  );
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-add-text").addEventListener("click", addText);
   el("text-font-family").addEventListener("change", (event) => {
@@ -5380,7 +5717,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("text-color").addEventListener("input", updateColorSwatch);
   el("text-color-swatch").addEventListener("click", onSwatchClick);
   el("grid-check").addEventListener("change", () => {
-    writeGridSettings({ ...readGridSettings(), visible: el("grid-check").checked });
+    writeGridSettings({
+      ...readGridSettings(),
+      visible: el("grid-check").checked,
+    });
     renderGrid();
   });
   el("btn-grid").addEventListener("click", openGridSettings);
@@ -5402,7 +5742,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
     });
   });
-  el("btn-grid-cancel").addEventListener("click", () => el("grid-dialog").close("cancel"));
+  el("btn-grid-cancel").addEventListener("click", () =>
+    el("grid-dialog").close("cancel"),
+  );
   el("btn-grid-save").addEventListener("click", () => {
     const grid = readGridFields();
     if (!grid) {
@@ -5415,7 +5757,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     gridDraft = null;
     showGridView(false);
   });
-  el("btn-grid-confirm-ok").addEventListener("click", () => el("grid-dialog").close("confirm"));
+  el("btn-grid-confirm-ok").addEventListener("click", () =>
+    el("grid-dialog").close("confirm"),
+  );
   if (el("independent-check")) {
     el("independent-check").addEventListener("change", () => {
       const variant = currentVariant();
@@ -5438,7 +5782,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
   if (el("btn-canvas-size")) {
     el("btn-canvas-size").addEventListener("click", openCanvasSize);
-    el("btn-canvas-size-cancel").addEventListener("click", () => el("canvas-size-dialog").close("cancel"));
+    el("btn-canvas-size-cancel").addEventListener("click", () =>
+      el("canvas-size-dialog").close("cancel"),
+    );
     el("btn-canvas-size-save").addEventListener("click", () => {
       const size = readCanvasSizeFields();
       if (!size) {
@@ -5457,10 +5803,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       el("canvas-size-dialog").close("confirm");
     });
   }
-  el("btn-text-style-save").addEventListener("click", () => el("text-style-dialog").close("confirm"));
-  el("btn-text-style-cancel").addEventListener("click", () => el("text-style-dialog").close("cancel"));
-  el("btn-delete-text-confirm").addEventListener("click", () => el("delete-text-dialog").close("confirm"));
-  el("btn-delete-text-cancel").addEventListener("click", () => el("delete-text-dialog").close("cancel"));
+  el("btn-text-style-save").addEventListener("click", () =>
+    el("text-style-dialog").close("confirm"),
+  );
+  el("btn-text-style-cancel").addEventListener("click", () =>
+    el("text-style-dialog").close("cancel"),
+  );
+  el("btn-delete-text-confirm").addEventListener("click", () =>
+    el("delete-text-dialog").close("confirm"),
+  );
+  el("btn-delete-text-cancel").addEventListener("click", () =>
+    el("delete-text-dialog").close("cancel"),
+  );
   el("btn-sync-sizes").addEventListener("click", syncLayerSizes);
   el("btn-sync-confirm").addEventListener("click", () => {
     el("sync-dialog").close("confirm");
@@ -5469,7 +5823,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     el("sync-dialog").close("cancel");
   });
   root.querySelectorAll("[data-layer-move]").forEach((button) => {
-    button.addEventListener("click", () => moveLayer(button.getAttribute("data-layer-move")));
+    button.addEventListener("click", () =>
+      moveLayer(button.getAttribute("data-layer-move")),
+    );
   });
 
   el("btn-manage-variants").addEventListener("click", () => {
@@ -5479,7 +5835,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     variantManager.open();
   });
-  el("btn-manage-templates").addEventListener("click", () => templateManager.open());
+  el("btn-manage-templates").addEventListener("click", () =>
+    templateManager.open(),
+  );
 
   el("btn-reset-confirm").addEventListener("click", () => {
     el("reset-dialog").close("confirm");
@@ -5548,7 +5906,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     // 另一個分頁已替這份 PSD 新增模組：草稿換成該模組
-    const registered = state.draft ? findTemplateIndexIn(templates(), state.master) : -1;
+    const registered = state.draft
+      ? findTemplateIndexIn(templates(), state.master)
+      : -1;
     if (registered >= 0) {
       state.draft = null;
       state.templateIndex = registered;
@@ -5591,7 +5951,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function updateTemplateHint() {
-    el("template-hint").style.display = masterNeedsTemplate() ? "block" : "none";
+    el("template-hint").style.display = masterNeedsTemplate()
+      ? "block"
+      : "none";
   }
 
   function open(master, note) {
@@ -5644,7 +6006,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       try {
         const required = applyRequiredLayers();
         return Object.keys(
-          requireMcdSmartLayers(getMcdSourceContainer(state.master, required, names), required, names),
+          requireMcdSmartLayers(
+            getMcdSourceContainer(state.master, required, names),
+            required,
+            names,
+          ),
         );
       } catch (_error) {
         return names;
@@ -5694,7 +6060,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     function updateToggleLabel() {
       const layers = checkedLayers();
-      layerToggle.textContent = layers.length ? layers.join("、") : "（尚未勾選圖層）";
+      layerToggle.textContent = layers.length
+        ? layers.join("、")
+        : "（尚未勾選圖層）";
     }
 
     function load() {
@@ -5743,7 +6111,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
 
     function currentSet() {
-      return state.outputIndex > 0 ? state.sets[state.outputIndex - 1] || null : null;
+      return state.outputIndex > 0
+        ? state.sets[state.outputIndex - 1] || null
+        : null;
     }
 
     function imageKey(file) {
@@ -5767,7 +6137,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         const key = imageKey(file);
         if (!state.imageInfos[key]) {
           try {
-            state.imageInfos[key] = await readTrimmedImageInfo(file, state.master);
+            state.imageInfos[key] = await readTrimmedImageInfo(
+              file,
+              state.master,
+            );
           } catch (error) {
             setStatus(`無法讀取 ${file.name}：${error.message || error}`);
           }
@@ -5779,7 +6152,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       state.outputIndex = index;
       const set = currentSet();
       const variant = set ? variantForSet(set) : null;
-      const variants = currentTemplate() ? currentTemplate().values.variants : [];
+      const variants = currentTemplate()
+        ? currentTemplate().values.variants
+        : [];
       state.variantIndex = variant ? variants.indexOf(variant) : 0;
       await preloadSet(set);
       if (state.outputIndex === index) {
@@ -5790,11 +6165,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     async function buildSets() {
       const template = currentTemplate();
       const present = presentLayers();
-      const layers = template && template.layers
-        ? template.layers.filter((name) => present.includes(name))
-        : [];
+      const layers =
+        template && template.layers
+          ? template.layers.filter((name) => present.includes(name))
+          : [];
       if (!layers.length) {
-        await app.showAlert("請先在「套圖圖層」勾選要換圖的圖層（PSD 裡要有這個圖層）。");
+        await app.showAlert(
+          "請先在「套圖圖層」勾選要換圖的圖層（PSD 裡要有這個圖層）。",
+        );
         return null;
       }
       if (!template.srcPath) {
@@ -5803,13 +6181,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
       const folder = await resolveSrcFolder(template.srcPath);
       if (!folder) {
-        await app.showAlert("找不到圖檔資料夾（或 Photoshop 不允許直接讀取這個路徑），請按「選擇資料夾」選一次。");
+        await app.showAlert(
+          "找不到圖檔資料夾（或 Photoshop 不允許直接讀取這個路徑），請按「選擇資料夾」選一次。",
+        );
         return null;
       }
       const { sets, perLayer } = await collectApplySets(folder, layers);
-      const summary = layers.map((name) => `${name} ${perLayer[name].length} 張`).join("、");
+      const summary = layers
+        .map((name) => `${name} ${perLayer[name].length} 張`)
+        .join("、");
       if (!sets.length) {
-        await app.showAlert(`資料夾裡找不到圖檔（${summary}）。子資料夾名稱需為圖層名去掉 $，例如 PROD、CTA。`);
+        await app.showAlert(
+          `資料夾裡找不到圖檔（${summary}）。子資料夾名稱需為圖層名去掉 $，例如 PROD、CTA。`,
+        );
         return null;
       }
       return { sets, summary };
@@ -5852,7 +6236,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         const done = await whilePhotoshopBusy(() =>
           generateApplyDocuments(state.master, state.sets, (set) => {
             const variants = template.values.variants;
-            return variants.find((item) => item.outputDocument === set.name) || variants[0];
+            return (
+              variants.find((item) => item.outputDocument === set.name) ||
+              variants[0]
+            );
           }),
         );
         if (done) {
@@ -5877,7 +6264,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return;
       }
       try {
-        rememberSrcFolder(folder.nativePath, await localFileSystem.createPersistentToken(folder));
+        rememberSrcFolder(
+          folder.nativePath,
+          await localFileSystem.createPersistentToken(folder),
+        );
       } catch (_error) {
         // 無法記住授權，下次需要再選一次
       }
@@ -6053,10 +6443,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return;
       }
       layerList.rows = layerList.rows.filter((item) => item !== row);
-      moduleStore.applyLayers = applyLayerNames().filter((name) => name !== row.original);
-      moduleStore.applyRequiredLayers = (moduleStore.applyRequiredLayers || []).filter(
+      moduleStore.applyLayers = applyLayerNames().filter(
         (name) => name !== row.original,
       );
+      moduleStore.applyRequiredLayers = (
+        moduleStore.applyRequiredLayers || []
+      ).filter((name) => name !== row.original);
       removeLayerData(row.original);
       renderLayerList();
       await persist(`已刪除圖層「${row.original}」`);
@@ -6068,7 +6460,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       let valid = true;
       rows.forEach((row, i) => {
         const name = row.name.trim();
-        const duplicate = rows.some((other, j) => j !== i && other.name.trim() === name);
+        const duplicate = rows.some(
+          (other, j) => j !== i && other.name.trim() === name,
+        );
         row.invalid = !name || duplicate;
         if (row.invalid) {
           row.editing = true;
@@ -6143,14 +6537,27 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     el("btn-edit-layers").addEventListener("click", openLayerList);
     el("btn-layer-add").addEventListener("click", addLayerRow);
     el("btn-layer-list-save").addEventListener("click", saveLayerList);
-    el("btn-layer-list-cancel").addEventListener("click", () => layerList.dialog.close("cancel"));
-    el("btn-layer-delete-confirm").addEventListener("click", confirmDeleteLayer);
+    el("btn-layer-list-cancel").addEventListener("click", () =>
+      layerList.dialog.close("cancel"),
+    );
+    el("btn-layer-delete-confirm").addEventListener(
+      "click",
+      confirmDeleteLayer,
+    );
     el("btn-layer-delete-cancel").addEventListener("click", () => {
       layerList.pendingDelete = null;
       showLayerListView(false);
     });
 
-    return { load, commit, resetOutputs, replacementFor, showOutput, generate, variantForSet };
+    return {
+      load,
+      commit,
+      resetOutputs,
+      replacementFor,
+      showOutput,
+      generate,
+      variantForSet,
+    };
   }
 
   if (isApply) {
@@ -6159,7 +6566,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   return workspace;
 }
-
 
 // ---------- 套圖：依 PSD 原稿位置，把勾選的圖層換成資料夾裡的圖 ----------
 //
@@ -6223,26 +6629,40 @@ function normalizeApplyTemplate(raw) {
     return null;
   }
   const layers = Array.isArray(raw.layers)
-    ? normalizeApplyLayers(raw.layers).filter((name) => raw.layers.includes(name))
+    ? normalizeApplyLayers(raw.layers).filter((name) =>
+        raw.layers.includes(name),
+      )
     : [];
   const out = {
     name: String(raw.name || "").trim(),
-    source: raw.source && typeof raw.source === "object" ? { ...raw.source } : null,
+    source:
+      raw.source && typeof raw.source === "object" ? { ...raw.source } : null,
     layers,
     srcPath: String(raw.srcPath || "").trim(),
   };
   // 版面（與 Resize 相同格式）；舊的套圖模組沒有，開啟母版時依 PSD 原稿補上
   if (raw.values && typeof raw.values === "object") {
-    const normalized = normalizeTemplate({ name: out.name, values: raw.values });
+    const normalized = normalizeTemplate({
+      name: out.name,
+      values: raw.values,
+    });
     out.values = normalized.values;
     if (!out.values.variants.length) {
-      out.values.variants.push({ outputDocument: "預設", elements: deepClone(DEFAULT_VARIANT_ELEMENTS) });
+      out.values.variants.push({
+        outputDocument: "預設",
+        elements: deepClone(DEFAULT_VARIANT_ELEMENTS),
+      });
     }
     // 層級順序可含自訂圖層，不套用 Resize 的五個圖層限制
-    const rawVariants = Array.isArray(raw.values.variants) ? raw.values.variants : [];
+    const rawVariants = Array.isArray(raw.values.variants)
+      ? raw.values.variants
+      : [];
     out.values.variants.forEach((variant, index) => {
       const order = rawVariants[index] && rawVariants[index].order;
-      if (Array.isArray(order) && order.every((name) => typeof name === "string")) {
+      if (
+        Array.isArray(order) &&
+        order.every((name) => typeof name === "string")
+      ) {
         variant.order = order.filter((name, i) => order.indexOf(name) === i);
       }
     });
@@ -6255,7 +6675,11 @@ function normalizeApplyTemplate(raw) {
  * 各組換圖第一次選到時從「預設」複製一份自己的版面，可再用「同步圖層」統一。
  */
 function applyInitialValues(doc) {
-  const measured = measureLayerFrames(doc, applyRequiredLayers(), applyLayerNames());
+  const measured = measureLayerFrames(
+    doc,
+    applyRequiredLayers(),
+    applyLayerNames(),
+  );
   const elements = {};
   for (const name of applyPositionNames()) {
     const frame = measured.frames[name];
@@ -6342,10 +6766,14 @@ async function collectApplySets(folder, layerNames) {
   const perLayer = {};
   for (const name of layerNames) {
     const key = name.replace("$", "").toLowerCase();
-    const sub = entries.find((entry) => entry.isFolder && entry.name.toLowerCase() === key);
+    const sub = entries.find(
+      (entry) => entry.isFolder && entry.name.toLowerCase() === key,
+    );
     const files = sub
       ? (await sub.getEntries())
-          .filter((entry) => entry.isFile && APPLY_IMAGE_PATTERN.test(entry.name))
+          .filter(
+            (entry) => entry.isFile && APPLY_IMAGE_PATTERN.test(entry.name),
+          )
           .sort((a, b) => naturalCompare(a.name, b.name))
       : [];
     perLayer[name] = files;
@@ -6365,12 +6793,21 @@ async function collectApplySets(folder, layerNames) {
 }
 
 // 各圖層在原稿畫布上的位置（百分比），畫布＝含齊圖層的工作區域或整份文件
-function measureLayerFrames(master, required = MCD_SMART_LAYER_NAMES, names = MCD_SMART_LAYER_NAMES) {
+function measureLayerFrames(
+  master,
+  required = MCD_SMART_LAYER_NAMES,
+  names = MCD_SMART_LAYER_NAMES,
+) {
   const container = getMcdSourceContainer(master, required, names);
   const layers = requireMcdSmartLayers(container, required, names);
   const frame =
     container === master
-      ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+      ? {
+          left: 0,
+          top: 0,
+          right: unitNumber(master.width),
+          bottom: unitNumber(master.height),
+        }
       : readLayerBounds(container);
   const width = Math.max(frame.right - frame.left, 1);
   const height = Math.max(frame.bottom - frame.top, 1);
@@ -6410,7 +6847,11 @@ function readImageSize(bytes) {
   const u16be = (i) => (bytes[i] << 8) | bytes[i + 1];
   const u16le = (i) => bytes[i] | (bytes[i + 1] << 8);
   const u24le = (i) => bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16);
-  const u32be = (i) => ((bytes[i] << 24) >>> 0) + (bytes[i + 1] << 16) + (bytes[i + 2] << 8) + bytes[i + 3];
+  const u32be = (i) =>
+    ((bytes[i] << 24) >>> 0) +
+    (bytes[i + 1] << 16) +
+    (bytes[i + 2] << 8) +
+    bytes[i + 3];
   const ascii = (i, n) => String.fromCharCode(...bytes.slice(i, i + n));
   if (bytes.length < 26) {
     return null;
@@ -6422,7 +6863,8 @@ function readImageSize(bytes) {
     return { width: u16le(6), height: u16le(8) };
   }
   if (ascii(0, 2) === "BM") {
-    const height = bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24);
+    const height =
+      bytes[22] | (bytes[23] << 8) | (bytes[24] << 16) | (bytes[25] << 24);
     return { width: u16le(18) + (bytes[20] << 16), height: Math.abs(height) };
   }
   if (ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
@@ -6456,12 +6898,22 @@ function readImageSize(bytes) {
         i += 1;
         continue;
       }
-      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      if (
+        marker === 0xd8 ||
+        marker === 0x01 ||
+        (marker >= 0xd0 && marker <= 0xd7)
+      ) {
         i += 2;
         continue;
       }
       // SOF0–SOF15（排除 DHT C4、JPG C8、DAC CC）記錄影像寬高
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      if (
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        marker !== 0xc4 &&
+        marker !== 0xc8 &&
+        marker !== 0xcc
+      ) {
         return { width: u16be(i + 7), height: u16be(i + 5) };
       }
       i += 2 + u16be(i + 2);
@@ -6492,7 +6944,9 @@ async function readTrimmedImageInfo(imageFile, master) {
   let trimmed = null;
   try {
     const tempFolder = await localFileSystem.getTemporaryFolder();
-    const out = await tempFolder.createFile(`apply-preview-${Date.now()}.png`, { overwrite: true });
+    const out = await tempFolder.createFile(`apply-preview-${Date.now()}.png`, {
+      overwrite: true,
+    });
     await whilePhotoshopBusy(() =>
       runModal(async () => {
         try {
@@ -6532,7 +6986,10 @@ async function exportTrimmedImagePng(imageFile, outFile) {
     const height = Math.round(b.bottom - b.top);
     const fullWidth = Math.round(unitNumber(doc.width));
     const fullHeight = Math.round(unitNumber(doc.height));
-    if (!(width >= 1 && height >= 1) || (width >= fullWidth && height >= fullHeight)) {
+    if (
+      !(width >= 1 && height >= 1) ||
+      (width >= fullWidth && height >= fullHeight)
+    ) {
       return null;
     }
     await translateLayer(layer, -b.left, -b.top);
@@ -6563,16 +7020,30 @@ async function replaceLayerImage(layer, imageFile) {
   await selectOnlyLayer(layer);
   const token = localFileSystem.createSessionToken(imageFile);
   await action.batchPlay(
-    [{ _obj: "placedLayerReplaceContents", null: { _path: token, _kind: "local" } }],
+    [
+      {
+        _obj: "placedLayerReplaceContents",
+        null: { _path: token, _kind: "local" },
+      },
+    ],
     { synchronousExecution: true },
   );
   // 「取代內容」會把圖層改名成新圖檔的檔名（$CTA → 01），改回原名，後續才找得到
   await action.batchPlay(
-    [{ _obj: "set", _target: [{ _ref: "layer", _id: layer.id }], to: { _obj: "layer", name: originalName } }],
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "layer", _id: layer.id }],
+        to: { _obj: "layer", name: originalName },
+      },
+    ],
     { synchronousExecution: true },
   );
   const after = boundsBox(layer);
-  const scale = Math.min(before.width / after.width, before.height / after.height);
+  const scale = Math.min(
+    before.width / after.width,
+    before.height / after.height,
+  );
   await scaleLayerUniform(layer, Math.max(scale, 0.01));
   const fitted = boundsBox(layer);
   await translateLayer(
@@ -6603,7 +7074,10 @@ async function generateApplyDocuments(master, sets, variantFor) {
         app.activeDocument = copy;
         try {
           const required = applyRequiredLayers();
-          const names = withExtraNames(applyLayerNames(), dollarLayerNames(copy));
+          const names = withExtraNames(
+            applyLayerNames(),
+            dollarLayerNames(copy),
+          );
           const container = getMcdSourceContainer(copy, required, names);
           for (const name of Object.keys(set.files)) {
             const layer = findNamedLayer(container, name);
@@ -6619,12 +7093,21 @@ async function generateApplyDocuments(master, sets, variantFor) {
             if (container !== copy) {
               throw new Error("PSD 使用工作區域，暫不支援調整版面尺寸");
             }
-            await copy.resizeCanvas(variant.width, variant.height, constants.AnchorPosition.MIDDLECENTER);
+            await copy.resizeCanvas(
+              variant.width,
+              variant.height,
+              constants.AnchorPosition.MIDDLECENTER,
+            );
           }
           if (variant) {
             const frame =
               container === copy
-                ? { left: 0, top: 0, right: unitNumber(copy.width), bottom: unitNumber(copy.height) }
+                ? {
+                    left: 0,
+                    top: 0,
+                    right: unitNumber(copy.width),
+                    bottom: unitNumber(copy.height),
+                  }
                 : readLayerBounds(container);
             const layers = requireMcdSmartLayers(container, required, names);
             for (const name of Object.keys(layers)) {
@@ -6738,9 +7221,12 @@ async function writeLayerText(layer, text) {
 // 影像 > 全部顯現：畫布放大到容得下所有圖層（作用中文件）
 async function revealAllCanvas() {
   try {
-    await action.batchPlay([{ _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } }], {
-      synchronousExecution: true,
-    });
+    await action.batchPlay(
+      [{ _obj: "revealAll", _options: { dialogOptions: "dontDisplay" } }],
+      {
+        synchronousExecution: true,
+      },
+    );
   } catch (_error) {
     // 已經都在畫布內時 Photoshop 可能不給執行，略過
   }
@@ -6750,7 +7236,12 @@ async function revealAllCanvas() {
 async function openSmartObjectContents(master, layer) {
   await selectOnlyLayer(layer);
   await action.batchPlay(
-    [{ _obj: "placedLayerEditContents", _options: { dialogOptions: "dontDisplay" } }],
+    [
+      {
+        _obj: "placedLayerEditContents",
+        _options: { dialogOptions: "dontDisplay" },
+      },
+    ],
     { synchronousExecution: true },
   );
   const inner = app.activeDocument;
@@ -6772,7 +7263,10 @@ async function withLayerTexts(master, layerName, required, names, task, save) {
   if (!layer) {
     throw new Error(`找不到圖層 ${layerName}`);
   }
-  if (isTextLayer(layer) || (!isSmartObject(layer) && canSearchChildren(layer))) {
+  if (
+    isTextLayer(layer) ||
+    (!isSmartObject(layer) && canSearchChildren(layer))
+  ) {
     const texts = isTextLayer(layer) ? [layer] : collectTextLayers(layer);
     const result = await task(master, texts);
     if (save && texts.length) {
@@ -6820,7 +7314,10 @@ async function applyTextOverride(doc, layer, override) {
       }
     }
   };
-  if (isTextLayer(layer) || (!isSmartObject(layer) && canSearchChildren(layer))) {
+  if (
+    isTextLayer(layer) ||
+    (!isSmartObject(layer) && canSearchChildren(layer))
+  ) {
     await apply(isTextLayer(layer) ? [layer] : collectTextLayers(layer));
     return;
   }
@@ -6839,11 +7336,20 @@ async function applyTextOverride(doc, layer, override) {
 }
 
 // 獨立樣板的文字預覽：在暫存文件複製圖層、套上自己的文字後匯出
-async function buildTextOverridePreview(master, layerName, required, names, override) {
+async function buildTextOverridePreview(
+  master,
+  layerName,
+  required,
+  names,
+  override,
+) {
   const tempFolder = await localFileSystem.getTemporaryFolder();
-  const file = await tempFolder.createFile(`preview-override-${master.id}-${Date.now()}.png`, {
-    overwrite: true,
-  });
+  const file = await tempFolder.createFile(
+    `preview-override-${master.id}-${Date.now()}.png`,
+    {
+      overwrite: true,
+    },
+  );
   let size = null;
   await runModal(async () => {
     await closeLeftoverPreviewDocuments();
@@ -6853,8 +7359,12 @@ async function buildTextOverridePreview(master, layerName, required, names, over
       throw new Error(`找不到圖層 ${layerName}`);
     }
     try {
-      size = await exportLayerPreviewPng(master, layer, file, layerName, (temp, copy) =>
-        applyTextOverride(temp, copy, override),
+      size = await exportLayerPreviewPng(
+        master,
+        layer,
+        file,
+        layerName,
+        (temp, copy) => applyTextOverride(temp, copy, override),
       );
     } finally {
       // 不管成功或失敗，暫存文件（以及打開的智慧型物件內容）都要關掉，不留在 Photoshop
@@ -6865,24 +7375,53 @@ async function buildTextOverridePreview(master, layerName, required, names, over
     }
   }, "擷取獨立樣板的文字");
   const buffer = await file.read({ format: formats.binary });
-  return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
+  return {
+    ...size,
+    dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
+  };
 }
 
 // 旋轉後的圖層預覽（UXP 不支援 CSS transform，改由 Photoshop 轉好再匯出）；
 // 同時只跑一個，避免 executeAsModal 互相衝突
 let rotatedPreviewQueue = Promise.resolve();
 
-function buildRotatedPreview(master, layerName, required, names, rotation, override) {
-  const job = rotatedPreviewQueue.then(() => buildRotatedPreviewNow(master, layerName, required, names, rotation, override));
+function buildRotatedPreview(
+  master,
+  layerName,
+  required,
+  names,
+  rotation,
+  override,
+) {
+  const job = rotatedPreviewQueue.then(() =>
+    buildRotatedPreviewNow(
+      master,
+      layerName,
+      required,
+      names,
+      rotation,
+      override,
+    ),
+  );
   rotatedPreviewQueue = job.catch(() => {});
   return job;
 }
 
-async function buildRotatedPreviewNow(master, layerName, required, names, rotation, override) {
+async function buildRotatedPreviewNow(
+  master,
+  layerName,
+  required,
+  names,
+  rotation,
+  override,
+) {
   const tempFolder = await localFileSystem.getTemporaryFolder();
-  const file = await tempFolder.createFile(`preview-rotate-${master.id}-${Date.now()}.png`, {
-    overwrite: true,
-  });
+  const file = await tempFolder.createFile(
+    `preview-rotate-${master.id}-${Date.now()}.png`,
+    {
+      overwrite: true,
+    },
+  );
   let size = null;
   await runModal(async () => {
     await closeLeftoverPreviewDocuments();
@@ -6892,13 +7431,19 @@ async function buildRotatedPreviewNow(master, layerName, required, names, rotati
       throw new Error(`找不到圖層 ${layerName}`);
     }
     try {
-      size = await exportLayerPreviewPng(master, layer, file, layerName, async (temp, copy) => {
-        if (override) {
-          await applyTextOverride(temp, copy, override);
-          app.activeDocument = temp;
-        }
-        await rotateLayer(copy, rotation);
-      });
+      size = await exportLayerPreviewPng(
+        master,
+        layer,
+        file,
+        layerName,
+        async (temp, copy) => {
+          if (override) {
+            await applyTextOverride(temp, copy, override);
+            app.activeDocument = temp;
+          }
+          await rotateLayer(copy, rotation);
+        },
+      );
     } finally {
       await closeLeftoverPreviewDocuments();
       if (isDocumentOpen(master)) {
@@ -6907,20 +7452,30 @@ async function buildRotatedPreviewNow(master, layerName, required, names, rotati
     }
   }, "產生旋轉預覽");
   const buffer = await file.read({ format: formats.binary });
-  return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
+  return {
+    ...size,
+    dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}`,
+  };
 }
 
 // 讀出圖層裡的文字：[{ name, text }]，沒有文字回傳空陣列
 async function readEditableTexts(master, layerName, required, names) {
   let texts = [];
   await runModal(async () => {
-    texts = await withLayerTexts(master, layerName, required, names, async (doc, layers) => {
-      const out = [];
-      for (const layer of layers) {
-        out.push({ name: layer.name, text: await readLayerText(doc, layer) });
-      }
-      return out;
-    }, false);
+    texts = await withLayerTexts(
+      master,
+      layerName,
+      required,
+      names,
+      async (doc, layers) => {
+        const out = [];
+        for (const layer of layers) {
+          out.push({ name: layer.name, text: await readLayerText(doc, layer) });
+        }
+        return out;
+      },
+      false,
+    );
   }, "讀取文字");
   return texts;
 }
@@ -6928,14 +7483,21 @@ async function readEditableTexts(master, layerName, required, names) {
 // 依讀取時的順序寫回文字並存檔
 async function writeEditableTexts(master, layerName, required, names, values) {
   await runModal(async () => {
-    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
-      if (layers.length !== values.length) {
-        throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
-      }
-      for (let i = 0; i < layers.length; i++) {
-        await writeLayerText(layers[i], values[i]);
-      }
-    }, true);
+    await withLayerTexts(
+      master,
+      layerName,
+      required,
+      names,
+      async (_doc, layers) => {
+        if (layers.length !== values.length) {
+          throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
+        }
+        for (let i = 0; i < layers.length; i++) {
+          await writeLayerText(layers[i], values[i]);
+        }
+      },
+      true,
+    );
   }, "更新文字");
 }
 
@@ -6996,7 +7558,12 @@ async function addTextLayerToMaster(master, required, names, text) {
 
     const frame =
       container === master
-        ? { left: 0, top: 0, right: unitNumber(master.width), bottom: unitNumber(master.height) }
+        ? {
+            left: 0,
+            top: 0,
+            right: unitNumber(master.width),
+            bottom: unitNumber(master.height),
+          }
         : readLayerBounds(container);
     const frameW = Math.max(frame.right - frame.left, 1);
     const frameH = Math.max(frame.bottom - frame.top, 1);
@@ -7027,8 +7594,18 @@ async function addTextLayerToMaster(master, required, names, text) {
               textKey: text,
               textClickPoint: {
                 _obj: "paint",
-                horizontal: { _unit: "percentUnit", _value: ((frame.left + frameW * 0.1) / unitNumber(master.width)) * 100 },
-                vertical: { _unit: "percentUnit", _value: ((frame.top + frameH * 0.2) / unitNumber(master.height)) * 100 },
+                horizontal: {
+                  _unit: "percentUnit",
+                  _value:
+                    ((frame.left + frameW * 0.1) / unitNumber(master.width)) *
+                    100,
+                },
+                vertical: {
+                  _unit: "percentUnit",
+                  _value:
+                    ((frame.top + frameH * 0.2) / unitNumber(master.height)) *
+                    100,
+                },
               },
               textStyleRange: [
                 {
@@ -7037,7 +7614,10 @@ async function addTextLayerToMaster(master, required, names, text) {
                   to: text.length,
                   textStyle: {
                     _obj: "textStyle",
-                    size: { _unit: "pointsUnit", _value: (sizePx * 72) / resolution },
+                    size: {
+                      _unit: "pointsUnit",
+                      _value: (sizePx * 72) / resolution,
+                    },
                     color: { _obj: "RGBColor", red: 0, grain: 0, blue: 0 },
                   },
                 },
@@ -7063,12 +7643,21 @@ async function addTextLayerToMaster(master, required, names, text) {
 
     // 轉成智慧型物件
     await selectOnlyLayer(textLayer);
-    await action.batchPlay([{ _obj: "newPlacedLayer", _options: { dialogOptions: "dontDisplay" } }], {
-      synchronousExecution: true,
-    });
+    await action.batchPlay(
+      [{ _obj: "newPlacedLayer", _options: { dialogOptions: "dontDisplay" } }],
+      {
+        synchronousExecution: true,
+      },
+    );
     const placed = (master.activeLayers && master.activeLayers[0]) || textLayer;
     await action.batchPlay(
-      [{ _obj: "set", _target: [{ _ref: "layer", _id: placed.id }], to: { _obj: "layer", name: newName } }],
+      [
+        {
+          _obj: "set",
+          _target: [{ _ref: "layer", _id: placed.id }],
+          to: { _obj: "layer", name: newName },
+        },
+      ],
       { synchronousExecution: true },
     );
     try {
@@ -7108,17 +7697,29 @@ function textStyleOf(layer) {
   let align = "left";
   try {
     const value = String(item.paragraphStyle.justification).toLowerCase();
-    align = value.includes("center") ? "center" : value.includes("right") ? "right" : "left";
+    align = value.includes("center")
+      ? "center"
+      : value.includes("right")
+        ? "right"
+        : "left";
   } catch (_error) {
     // 讀不到對齊就當靠左
   }
   let orientation = "horizontal";
   try {
-    orientation = String(item.orientation).toLowerCase().includes("vertical") ? "vertical" : "horizontal";
+    orientation = String(item.orientation).toLowerCase().includes("vertical")
+      ? "vertical"
+      : "horizontal";
   } catch (_error) {
     // 讀不到就當橫排
   }
-  return { font: String(cs.font || ""), size: roundTo(unitNumber(cs.size), 2), color, align, orientation };
+  return {
+    font: String(cs.font || ""),
+    size: roundTo(unitNumber(cs.size), 2),
+    color,
+    align,
+    orientation,
+  };
 }
 
 // 直排時半形字（數字、英文、$ + 等）會被 Photoshop 橫躺：轉成全形才會直立；轉回橫排時換回半形
@@ -7130,12 +7731,15 @@ function toFullWidth(text) {
 
 function toHalfWidth(text) {
   return String(text)
-    .replace(/[\uff01-\uff5e]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[\uff01-\uff5e]/g, (ch) =>
+      String.fromCharCode(ch.charCodeAt(0) - 0xfee0),
+    )
     .replace(/\u3000/g, " ");
 }
 
 function sameText(a, b) {
-  const norm = (value) => String(value == null ? "" : value).replace(/\r\n?|\n/g, "\r");
+  const norm = (value) =>
+    String(value == null ? "" : value).replace(/\r\n?|\n/g, "\r");
   return norm(a) === norm(b);
 }
 
@@ -7158,13 +7762,17 @@ async function applyTextStyle(layer, style) {
   if (style.size > 0 && !(Math.abs(style.size - current.size) < 0.01)) {
     cs.size = style.size;
   }
-  if (style.color && String(style.color).toUpperCase() !== String(current.color).toUpperCase()) {
+  if (
+    style.color &&
+    String(style.color).toUpperCase() !== String(current.color).toUpperCase()
+  ) {
     const color = new app.SolidColor();
     color.rgb.hexValue = style.color.replace("#", "");
     cs.color = color;
   }
   if (style.align && style.align !== current.align && constants.Justification) {
-    item.paragraphStyle.justification = constants.Justification[style.align.toUpperCase()];
+    item.paragraphStyle.justification =
+      constants.Justification[style.align.toUpperCase()];
   }
   if (style.orientation && style.orientation === current.orientation) {
     return; // 方向沒變
@@ -7172,7 +7780,10 @@ async function applyTextStyle(layer, style) {
   if (style.orientation === "vertical") {
     // 段落文字（固定大小的文字框）轉直排會照舊框的大小折行，每行只剩幾個字：先轉成點文字，只在換行處分行
     try {
-      if (item.isParagraphText && typeof item.convertToPointText === "function") {
+      if (
+        item.isParagraphText &&
+        typeof item.convertToPointText === "function"
+      ) {
         await item.convertToPointText();
       }
     } catch (_error) {
@@ -7182,7 +7793,9 @@ async function applyTextStyle(layer, style) {
   if (style.orientation) {
     // 橫排／直排
     let done = false;
-    const value = constants.Orientation && constants.Orientation[style.orientation.toUpperCase()];
+    const value =
+      constants.Orientation &&
+      constants.Orientation[style.orientation.toUpperCase()];
     if (value !== undefined) {
       try {
         item.orientation = value;
@@ -7197,7 +7810,10 @@ async function applyTextStyle(layer, style) {
           {
             _obj: "set",
             _target: [{ _ref: "textLayer", _id: layer.id }],
-            to: { _obj: "textLayer", orientation: { _enum: "orientation", _value: style.orientation } },
+            to: {
+              _obj: "textLayer",
+              orientation: { _enum: "orientation", _value: style.orientation },
+            },
           },
         ],
         { synchronousExecution: true },
@@ -7210,8 +7826,14 @@ async function applyTextStyle(layer, style) {
 async function readTextStyle(master, layerName, required, names) {
   let style = null;
   await runModal(async () => {
-    style = await withLayerTexts(master, layerName, required, names, async (_doc, layers) =>
-      layers.length ? textStyleOf(layers[0]) : null, false);
+    style = await withLayerTexts(
+      master,
+      layerName,
+      required,
+      names,
+      async (_doc, layers) => (layers.length ? textStyleOf(layers[0]) : null),
+      false,
+    );
   }, "讀取文字樣式");
   return style;
 }
@@ -7219,14 +7841,21 @@ async function readTextStyle(master, layerName, required, names) {
 // 套用到圖層裡所有文字圖層並存檔
 async function writeTextStyle(master, layerName, required, names, style) {
   await runModal(async () => {
-    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
-      if (!layers.length) {
-        throw new Error(`${layerName} 沒有文字`);
-      }
-      for (const layer of layers) {
-        await applyTextStyle(layer, style);
-      }
-    }, true);
+    await withLayerTexts(
+      master,
+      layerName,
+      required,
+      names,
+      async (_doc, layers) => {
+        if (!layers.length) {
+          throw new Error(`${layerName} 沒有文字`);
+        }
+        for (const layer of layers) {
+          await applyTextStyle(layer, style);
+        }
+      },
+      true,
+    );
   }, "更新文字樣式");
 }
 
@@ -7245,7 +7874,11 @@ function hexToRgb(hex) {
 
 function rgbToHex(red, green, blue) {
   return `#${[red, green, blue]
-    .map((n) => Math.round(clampNumber(Number(n) || 0, 0, 255)).toString(16).padStart(2, "0"))
+    .map((n) =>
+      Math.round(clampNumber(Number(n) || 0, 0, 255))
+        .toString(16)
+        .padStart(2, "0"),
+    )
     .join("")
     .toUpperCase()}`;
 }
@@ -7261,7 +7894,12 @@ async function pickColorInPhotoshop(hex) {
           _obj: "showColorPicker",
           _target: [{ _ref: "application" }],
           context: "文字顏色",
-          color: { _obj: "RGBColor", red: rgb.red, grain: rgb.green, blue: rgb.blue },
+          color: {
+            _obj: "RGBColor",
+            red: rgb.red,
+            grain: rgb.green,
+            blue: rgb.blue,
+          },
         },
       ],
       {},
@@ -7277,13 +7915,22 @@ function pickerColorToHex(color) {
   if (!color) {
     return null;
   }
-  const n = (value) => Number(value && typeof value === "object" ? value._value : value);
+  const n = (value) =>
+    Number(value && typeof value === "object" ? value._value : value);
   const kind = String(color._obj || "").toLowerCase();
   if (Number.isFinite(n(color.red))) {
-    return rgbToHex(n(color.red), n(color.grain !== undefined ? color.grain : color.green), n(color.blue));
+    return rgbToHex(
+      n(color.red),
+      n(color.grain !== undefined ? color.grain : color.green),
+      n(color.blue),
+    );
   }
   if (kind.startsWith("hsb") || Number.isFinite(n(color.brightness))) {
-    const rgb = hsbToRgb((((n(color.hue) % 360) + 360) % 360) / 360, n(color.saturation) / 100, n(color.brightness) / 100);
+    const rgb = hsbToRgb(
+      (((n(color.hue) % 360) + 360) % 360) / 360,
+      n(color.saturation) / 100,
+      n(color.brightness) / 100,
+    );
     return rgbToHex(rgb[0], rgb[1], rgb[2]);
   }
   try {
@@ -7309,17 +7956,31 @@ function pickerColorToHex(color) {
 }
 
 // 文字與樣式一起改、只存一次（轉向用）
-async function writeTextsAndStyle(master, layerName, required, names, values, style) {
+async function writeTextsAndStyle(
+  master,
+  layerName,
+  required,
+  names,
+  values,
+  style,
+) {
   await runModal(async () => {
-    await withLayerTexts(master, layerName, required, names, async (_doc, layers) => {
-      if (layers.length !== values.length) {
-        throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
-      }
-      for (let i = 0; i < layers.length; i++) {
-        await writeLayerText(layers[i], values[i]);
-        await applyTextStyle(layers[i], style);
-      }
-    }, true);
+    await withLayerTexts(
+      master,
+      layerName,
+      required,
+      names,
+      async (_doc, layers) => {
+        if (layers.length !== values.length) {
+          throw new Error(`${layerName} 的文字圖層數量已改變，請重新雙擊編輯`);
+        }
+        for (let i = 0; i < layers.length; i++) {
+          await writeLayerText(layers[i], values[i]);
+          await applyTextStyle(layers[i], style);
+        }
+      },
+      true,
+    );
   }, "轉向");
 }
 
@@ -7361,7 +8022,10 @@ async function readFontListByBatchPlay() {
     [
       {
         _obj: "get",
-        _target: [{ _property: "fontList" }, { _ref: "application", _enum: "ordinal", _value: "targetEnum" }],
+        _target: [
+          { _property: "fontList" },
+          { _ref: "application", _enum: "ordinal", _value: "targetEnum" },
+        ],
       },
     ],
     {},
@@ -7379,7 +8043,9 @@ async function readFontListByBatchPlay() {
     if (!family) {
       // 沒有字族名稱：從完整名稱去掉樣式（例如「Arial Bold」→「Arial」）
       const name = String(names[i] || postScriptName || "");
-      family = name.endsWith(` ${style}`) ? name.slice(0, -style.length - 1) : name;
+      family = name.endsWith(` ${style}`)
+        ? name.slice(0, -style.length - 1)
+        : name;
     }
     return { family, style, postScriptName: String(postScriptName || "") };
   });
@@ -7425,7 +8091,9 @@ const FONT_WEIGHTS = [
 
 // 樣式名稱 → 粗細數字（100～900，跟 CSS font-weight 一樣）
 function fontWeightOf(style) {
-  const value = String(style || "").toLowerCase().replace(/[\s_-]/g, "");
+  const value = String(style || "")
+    .toLowerCase()
+    .replace(/[\s_-]/g, "");
   const w = value.match(/(?:^|[^a-z])w([1-9])(?![0-9])/);
   if (w) {
     return Number(w[1]) * 100; // 日文字型的 W3、W6…
@@ -7447,16 +8115,36 @@ function fontWeightOf(style) {
 // ---------- 顏色字串（#hex、rgb()、rgba()、hsl()、hsla()、hsb()、顏色名稱） ----------
 
 const NAMED_COLORS = {
-  black: "000000", white: "FFFFFF", red: "FF0000", green: "008000", lime: "00FF00", blue: "0000FF",
-  yellow: "FFFF00", cyan: "00FFFF", aqua: "00FFFF", magenta: "FF00FF", fuchsia: "FF00FF",
-  gray: "808080", grey: "808080", silver: "C0C0C0", maroon: "800000", olive: "808000",
-  navy: "000080", purple: "800080", teal: "008080", orange: "FFA500", pink: "FFC0CB",
-  brown: "A52A2A", gold: "FFD700",
+  black: "000000",
+  white: "FFFFFF",
+  red: "FF0000",
+  green: "008000",
+  lime: "00FF00",
+  blue: "0000FF",
+  yellow: "FFFF00",
+  cyan: "00FFFF",
+  aqua: "00FFFF",
+  magenta: "FF00FF",
+  fuchsia: "FF00FF",
+  gray: "808080",
+  grey: "808080",
+  silver: "C0C0C0",
+  maroon: "800000",
+  olive: "808000",
+  navy: "000080",
+  purple: "800080",
+  teal: "008080",
+  orange: "FFA500",
+  pink: "FFC0CB",
+  brown: "A52A2A",
+  gold: "FFD700",
 };
 
 // 回傳 { hex: "#RRGGBB", alpha: 0～1 }；看不懂回傳 null
 function parseColor(input) {
-  const text = String(input || "").trim().toLowerCase();
+  const text = String(input || "")
+    .trim()
+    .toLowerCase();
   if (!text) {
     return null;
   }
@@ -7467,7 +8155,10 @@ function parseColor(input) {
   if (hexMatch) {
     let digits = hexMatch[1];
     if (digits.length <= 4) {
-      digits = digits.split("").map((ch) => ch + ch).join("");
+      digits = digits
+        .split("")
+        .map((ch) => ch + ch)
+        .join("");
     }
     const alpha = digits.length === 8 ? parseInt(digits.slice(6), 16) / 255 : 1;
     return { hex: `#${digits.slice(0, 6).toUpperCase()}`, alpha };
@@ -7491,16 +8182,35 @@ function parseColor(input) {
     const n = part.endsWith("%") ? num(part) / 100 : num(part);
     return clampNumber(n, 0, 1);
   };
-  const percent = (part, scale) => (part.endsWith("%") ? (num(part) / 100) * scale : num(part));
+  const percent = (part, scale) =>
+    part.endsWith("%") ? (num(part) / 100) * scale : num(part);
   const alpha = alphaOf(parts[3]);
   if (fn[1].startsWith("rgb")) {
     const [r, g, b] = parts.slice(0, 3).map((part) => percent(part, 255));
     return { hex: rgbToHex(r, g, b), alpha };
   }
   const hue = (((num(parts[0]) % 360) + 360) % 360) / 360;
-  const sat = clampNumber(parts[1].endsWith("%") ? num(parts[1]) / 100 : num(parts[1]) > 1 ? num(parts[1]) / 100 : num(parts[1]), 0, 1);
-  const third = clampNumber(parts[2].endsWith("%") ? num(parts[2]) / 100 : num(parts[2]) > 1 ? num(parts[2]) / 100 : num(parts[2]), 0, 1);
-  const rgb = fn[1].startsWith("hsl") ? hslToRgb(hue, sat, third) : hsbToRgb(hue, sat, third);
+  const sat = clampNumber(
+    parts[1].endsWith("%")
+      ? num(parts[1]) / 100
+      : num(parts[1]) > 1
+        ? num(parts[1]) / 100
+        : num(parts[1]),
+    0,
+    1,
+  );
+  const third = clampNumber(
+    parts[2].endsWith("%")
+      ? num(parts[2]) / 100
+      : num(parts[2]) > 1
+        ? num(parts[2]) / 100
+        : num(parts[2]),
+    0,
+    1,
+  );
+  const rgb = fn[1].startsWith("hsl")
+    ? hslToRgb(hue, sat, third)
+    : hsbToRgb(hue, sat, third);
   return { hex: rgbToHex(rgb[0], rgb[1], rgb[2]), alpha };
 }
 
@@ -7526,7 +8236,14 @@ function hsbToRgb(h, s, v) {
   const p = v * (1 - s);
   const q = v * (1 - f * s);
   const t = v * (1 - (1 - f) * s);
-  const [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i % 6];
+  const [r, g, b] = [
+    [v, t, p],
+    [q, v, p],
+    [p, v, t],
+    [p, q, v],
+    [t, p, v],
+    [v, p, q],
+  ][i % 6];
   return [r * 255, g * 255, b * 255];
 }
 
@@ -7610,8 +8327,14 @@ const APPLY_MODE = {
 };
 
 const workspaces = {
-  resize: createResizeWorkspace(document.querySelector('[data-workspace="resize"]'), RESIZE_MODE),
-  apply: createResizeWorkspace(document.querySelector('[data-workspace="apply"]'), APPLY_MODE),
+  resize: createResizeWorkspace(
+    document.querySelector('[data-workspace="resize"]'),
+    RESIZE_MODE,
+  ),
+  apply: createResizeWorkspace(
+    document.querySelector('[data-workspace="apply"]'),
+    APPLY_MODE,
+  ),
 };
 const START_TAB_KEY = "bannerResizer.startTab";
 
@@ -7641,7 +8364,10 @@ startModePicker.addEventListener("change", (event) => {
 function selectTab(name) {
   activeTab = name;
   document.querySelectorAll("[data-tab]").forEach((button) => {
-    button.classList.toggle("is-active", button.getAttribute("data-tab") === name);
+    button.classList.toggle(
+      "is-active",
+      button.getAttribute("data-tab") === name,
+    );
   });
   Object.keys(workspaces).forEach((key) => {
     workspaces[key].root.style.display = key === name ? "block" : "none";
@@ -7678,7 +8404,9 @@ function parseModuleJsonText(text) {
     throw new Error(`JSON 格式錯誤：${error.message}`);
   }
   if (!Array.isArray(data.templates)) {
-    throw new Error("最外層需為 { \"resize\": { \"templates\": [ ... ] }, \"image-set\": [ ... ] }");
+    throw new Error(
+      '最外層需為 { "resize": { "templates": [ ... ] }, "image-set": [ ... ] }',
+    );
   }
   const names = new Set();
   const templates = data.templates.map((raw, index) => {
@@ -7693,19 +8421,19 @@ function parseModuleJsonText(text) {
     return template;
   });
   const applyNames = new Set();
-  const applyTemplates = (Array.isArray(data.applyTemplates) ? data.applyTemplates : []).map(
-    (raw, index) => {
-      const template = normalizeApplyTemplate(raw);
-      if (!template || !template.name) {
-        throw new Error(`image-set 第 ${index + 1} 個模組缺少 name`);
-      }
-      if (applyNames.has(template.name)) {
-        throw new Error(`套圖模組名稱重複：${template.name}`);
-      }
-      applyNames.add(template.name);
-      return template;
-    },
-  );
+  const applyTemplates = (
+    Array.isArray(data.applyTemplates) ? data.applyTemplates : []
+  ).map((raw, index) => {
+    const template = normalizeApplyTemplate(raw);
+    if (!template || !template.name) {
+      throw new Error(`image-set 第 ${index + 1} 個模組缺少 name`);
+    }
+    if (applyNames.has(template.name)) {
+      throw new Error(`套圖模組名稱重複：${template.name}`);
+    }
+    applyNames.add(template.name);
+    return template;
+  });
   return {
     templates,
     applyTemplates,
@@ -7746,7 +8474,9 @@ async function openJsonEditor() {
   });
 }
 
-document.getElementById("btn-edit-module-json").addEventListener("click", openJsonEditor);
+document
+  .getElementById("btn-edit-module-json")
+  .addEventListener("click", openJsonEditor);
 
 document.getElementById("btn-json-cancel").addEventListener("click", () => {
   jsonEditor.dialog.close("cancel");
@@ -7763,45 +8493,49 @@ document.getElementById("btn-json-save").addEventListener("click", () => {
   showJsonEditorView(true);
 });
 
-document.getElementById("btn-json-confirm-cancel").addEventListener("click", () => {
-  jsonEditor.pending = null;
-  showJsonEditorView(false);
-});
-
-document.getElementById("btn-json-confirm-ok").addEventListener("click", async () => {
-  const pending = jsonEditor.pending;
-  if (!pending) {
-    return;
-  }
-  const previous = {
-    templates: moduleStore.templates,
-    applyTemplates: moduleStore.applyTemplates,
-    applyLayers: moduleStore.applyLayers,
-    applyRequiredLayers: moduleStore.applyRequiredLayers,
-    reference: moduleStore.reference,
-  };
-  moduleStore.templates = pending.templates;
-  moduleStore.applyTemplates = pending.applyTemplates;
-  moduleStore.applyLayers = pending.applyLayers;
-  moduleStore.applyRequiredLayers = pending.applyRequiredLayers;
-  moduleStore.reference = pending.reference;
-  try {
-    await saveModuleStore();
-  } catch (error) {
-    moduleStore.templates = previous.templates;
-    moduleStore.applyTemplates = previous.applyTemplates;
-    moduleStore.applyLayers = previous.applyLayers;
-    moduleStore.applyRequiredLayers = previous.applyRequiredLayers;
-    moduleStore.reference = previous.reference;
-    jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
+document
+  .getElementById("btn-json-confirm-cancel")
+  .addEventListener("click", () => {
+    jsonEditor.pending = null;
     showJsonEditorView(false);
-    return;
-  }
-  jsonEditor.pending = null;
-  jsonEditor.dialog.close("save");
-  notifyModuleStoreChanged(null);
-  await showToast("已儲存 module.json");
-});
+  });
+
+document
+  .getElementById("btn-json-confirm-ok")
+  .addEventListener("click", async () => {
+    const pending = jsonEditor.pending;
+    if (!pending) {
+      return;
+    }
+    const previous = {
+      templates: moduleStore.templates,
+      applyTemplates: moduleStore.applyTemplates,
+      applyLayers: moduleStore.applyLayers,
+      applyRequiredLayers: moduleStore.applyRequiredLayers,
+      reference: moduleStore.reference,
+    };
+    moduleStore.templates = pending.templates;
+    moduleStore.applyTemplates = pending.applyTemplates;
+    moduleStore.applyLayers = pending.applyLayers;
+    moduleStore.applyRequiredLayers = pending.applyRequiredLayers;
+    moduleStore.reference = pending.reference;
+    try {
+      await saveModuleStore();
+    } catch (error) {
+      moduleStore.templates = previous.templates;
+      moduleStore.applyTemplates = previous.applyTemplates;
+      moduleStore.applyLayers = previous.applyLayers;
+      moduleStore.applyRequiredLayers = previous.applyRequiredLayers;
+      moduleStore.reference = previous.reference;
+      jsonEditor.error.textContent = `寫入失敗：${error.message || error}`;
+      showJsonEditorView(false);
+      return;
+    }
+    jsonEditor.pending = null;
+    jsonEditor.dialog.close("save");
+    notifyModuleStoreChanged(null);
+    await showToast("已儲存 module.json");
+  });
 
 async function openResizeSettingsPanel() {
   await ensureModuleStore();
@@ -7836,26 +8570,27 @@ document
 const btnOpenCsv = document.getElementById("btn-open-csv");
 const btnGenBanner1 = document.getElementById("btn-gen-banner1");
 
-btnOpenCsv && btnOpenCsv.addEventListener("click", async () => {
-  try {
-    const text = await readCsvText();
-    if (text === null) {
-      return;
-    }
+btnOpenCsv &&
+  btnOpenCsv.addEventListener("click", async () => {
+    try {
+      const text = await readCsvText();
+      if (text === null) {
+        return;
+      }
 
-    const jobs = parseCsvJobs(text);
-    if (!jobs.length) {
-      await app.showAlert(
-        "CSV 中找不到有效資料。第一欄需為尺寸（例如 300x300）。",
-      );
-      return;
-    }
+      const jobs = parseCsvJobs(text);
+      if (!jobs.length) {
+        await app.showAlert(
+          "CSV 中找不到有效資料。第一欄需為尺寸（例如 300x300）。",
+        );
+        return;
+      }
 
-    await createArtboardDocumentFromCsvJobs(jobs);
-  } catch (error) {
-    await app.showAlert(`開檔失敗：${error.message || error}`);
-  }
-});
+      await createArtboardDocumentFromCsvJobs(jobs);
+    } catch (error) {
+      await app.showAlert(`開檔失敗：${error.message || error}`);
+    }
+  });
 
 btnGenBanner1 &&
   btnGenBanner1.addEventListener("click", async () => {
