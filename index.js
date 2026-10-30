@@ -4734,21 +4734,22 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   /**
-   * 框的縮放（對邊／對角固定不動）：
-   *   四個角：框等比縮放；不限高度時高度維持「不限」，圖層照舊以寬度等比放大縮小
-   *   上下邊：只改框高（會設定高度%）
-   *   左右邊：只改框寬
+   * 框的縮放（對邊／對角固定不動，圖像一律等比）：
+   *   四個角：寬高一起變；原本有高度% 時限制跟著縮放，否則維持不限
+   *   左右邊：只看水平拖曳改寬度%，高度隨比例，並清掉高度限制
+   *   上下邊：只看垂直拖曳，換算成寬度%，同樣清掉高度限制
    * 角落以水平或垂直拖曳量中變化較大者為準，拖斜線時比較順手。
+   * 四邊在另一軸置中長出，中點才會留在游標上。
    */
   function resizeSpecFromDrag(drag, dxPercent, dyPercent) {
     const { start, startHeight, corner } = drag;
     const sx = corner.includes("e") ? 1 : corner.includes("w") ? -1 : 0;
     const sy = corner.includes("s") ? 1 : corner.includes("n") ? -1 : 0;
+    const ratio = startHeight / Math.max(start.widthPercent, 0.01);
     let width = start.widthPercent;
     let height = startHeight;
 
     if (sx && sy) {
-      const ratio = startHeight / Math.max(start.widthPercent, 0.01);
       const widthFromX = start.widthPercent + sx * dxPercent;
       const widthFromY = ratio
         ? (startHeight + sy * dyPercent) / ratio
@@ -4760,22 +4761,50 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       height = width * ratio;
     } else if (sx) {
       width = Math.max(MIN_WIDTH_PERCENT, start.widthPercent + sx * dxPercent);
+      height = width * ratio;
     } else {
-      height = Math.max(MIN_WIDTH_PERCENT, startHeight + sy * dyPercent);
+      const nextHeight = Math.max(
+        MIN_WIDTH_PERCENT,
+        startHeight + sy * dyPercent,
+      );
+      width = Math.max(
+        MIN_WIDTH_PERCENT,
+        ratio ? nextHeight / ratio : start.widthPercent,
+      );
+      height = ratio ? width * ratio : nextHeight;
+    }
+
+    let left = start.leftPercent;
+    let top = start.topPercent;
+    if (sx && sy) {
+      if (sx < 0) {
+        left = start.leftPercent + (start.widthPercent - width);
+      }
+      if (sy < 0) {
+        top = start.topPercent + (startHeight - height);
+      }
+    } else if (sx) {
+      if (sx < 0) {
+        left = start.leftPercent + (start.widthPercent - width);
+      }
+      top = start.topPercent + (startHeight - height) / 2;
+    } else {
+      left = start.leftPercent + (start.widthPercent - width) / 2;
+      if (sy < 0) {
+        top = start.topPercent + (startHeight - height);
+      }
     }
 
     const next = {
       ...start,
-      leftPercent:
-        sx < 0
-          ? start.leftPercent + (start.widthPercent - width)
-          : start.leftPercent,
-      topPercent:
-        sy < 0 ? start.topPercent + (startHeight - height) : start.topPercent,
+      leftPercent: left,
+      topPercent: top,
       widthPercent: width,
     };
-    if (hasFrameHeight(start) || (sy && !sx)) {
+    if (sx && sy && hasFrameHeight(start)) {
       next.heightPercent = height;
+    } else {
+      delete next.heightPercent;
     }
     return next;
   }
