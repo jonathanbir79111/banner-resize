@@ -500,10 +500,23 @@
         gap: 6px;
       }
 
+      /* 標題（例如「圖層」）不換行；右邊按鈕多時縮小按鈕留白與字，不擠壓標題 */
+      .picker-title-row .picker-title {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .picker-title-row .title-buttons {
+        gap: 4px;
+        min-width: 0;
+      }
+
       .picker-title-row .small-btn {
         height: 22px;
-        padding: 0 10px;
+        padding: 0 6px;
+        font-size: 10px;
         line-height: 20px;
+        white-space: nowrap;
       }
 
       .picker-title-row .small-btn.is-actual-size {
