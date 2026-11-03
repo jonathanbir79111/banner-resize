@@ -806,6 +806,27 @@ async function scaleLayerUniform(layer, scale) {
   );
 }
 
+// 寬高各自縮放（拉伸填滿框用）
+async function scaleLayerXY(layer, scaleX, scaleY) {
+  await prepareLayerForTransform(layer);
+  await action.batchPlay(
+    [
+      {
+        _obj: "transform",
+        _target: [{ _ref: "layer", _id: layer.id }],
+        freeTransformCenterState: {
+          _enum: "quadCenterState",
+          _value: "QCSAverage",
+        },
+        width: { _unit: "percentUnit", _value: scaleX * 100 },
+        height: { _unit: "percentUnit", _value: scaleY * 100 },
+        linked: false,
+      },
+    ],
+    { synchronousExecution: true },
+  );
+}
+
 async function translateLayer(layer, dx, dy) {
   if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
     return;
@@ -1312,6 +1333,14 @@ function normalizeFrameOptions(src, out) {
   if (src.centered === true) {
     out.centered = true;
   }
+  // 這個樣板不顯示這個圖層
+  if (src.hidden === true) {
+    out.hidden = true;
+  }
+  // 拉伸填滿框：不維持比例，剛好等於框的寬高（要有高度%）
+  if (src.stretch === true && out.heightPercent > 0) {
+    out.stretch = true;
+  }
   const rotation = normalizeAngle(src.rotation);
   if (Number.isFinite(rotation) && rotation) {
     out.rotation = rotation;
@@ -1398,7 +1427,19 @@ function resolveAlign(name, spec) {
  *   縮放     = 有框高且自然高度超過框高 ? 框高 ÷ 自然高度 : 1
  *   位置     = 框起點 + (框尺寸 − 圖層尺寸) × 對齊比例（0 / 0.5 / 1）
  */
+function isStretched(name, spec) {
+  return name !== "$BG" && spec.stretch === true && hasFrameHeight(spec);
+}
+
 function fitInFrame(name, spec, aspectPercent) {
+  if (isStretched(name, spec)) {
+    return {
+      left: spec.leftPercent,
+      top: spec.topPercent,
+      width: spec.widthPercent,
+      height: spec.heightPercent,
+    };
+  }
   const isBackground = name === "$BG";
   const framed = !isBackground && hasFrameHeight(spec);
   const naturalHeight = spec.widthPercent * aspectPercent;
@@ -1980,13 +2021,38 @@ async function layoutSmartByPercents(layer, canvasW, canvasH, spec, name) {
 
 // 等比放進框內（見 fitInFrame），框外不會超出；frame 為畫布（工作區域或整份文件）的像素範圍
 async function layoutInFrame(layer, frame, spec, name) {
+  if (spec.hidden) {
+    // 這個樣板隱藏的圖層：產出時關掉眼睛，不排版
+    try {
+      layer.visible = false;
+    } catch (_error) {
+      await action.batchPlay(
+        [{ _obj: "hide", null: [{ _ref: "layer", _id: layer.id }] }],
+        { synchronousExecution: true },
+      );
+    }
+    return;
+  }
   const canvasW = frame.right - frame.left;
   const canvasH = frame.bottom - frame.top;
   const src = boundsBox(layer);
   const aspectPercent = (src.height / src.width) * (canvasW / canvasH);
   const rect = fitInFrame(name, spec, aspectPercent);
   const scale = (canvasW * rect.width) / 100 / src.width;
-  await scaleLayerUniform(layer, Math.max(scale, 0.01));
+  if (isStretched(name, spec)) {
+    const scaleX = Math.max(scale, 0.01);
+    const scaleY = Math.max((canvasH * rect.height) / 100 / src.height, 0.01);
+    await scaleLayerXY(layer, scaleX, scaleY);
+    // 群組裡的文字不要跟著變形：反向縮回來，改成等比縮放（倍率取寬高較小的那個），位置照比例
+    if (canSearchChildren(layer)) {
+      const uniform = Math.min(scaleX, scaleY);
+      for (const text of collectTextLayers(layer)) {
+        await scaleLayerXY(text, uniform / scaleX, uniform / scaleY);
+      }
+    }
+  } else {
+    await scaleLayerUniform(layer, Math.max(scale, 0.01));
+  }
 
   const fitted = boundsBox(layer);
   await translateLayer(
@@ -2224,12 +2290,50 @@ function scaleElementsForDocument(elements, doc) {
   return elements;
 }
 
-// 新模組（或草稿）的數值：內建樣板，寬度依基準換算
+const ORIGINAL_VARIANT_NAME = "原稿.psd";
+// 上傳 PSD 後是否也帶入內建樣板（左字右圖、全部置中…）；先關掉，只給「原稿」
+const INCLUDE_BUILTIN_PRESETS = false;
+
+// PSD 本身的版面：每個 $ 圖層的位置、大小跟 PSD 一模一樣（畫布＝PSD 尺寸）
+function originalVariantFor(doc) {
+  const names = withExtraNames(MCD_SMART_LAYER_NAMES, dollarLayerNames(doc));
+  const { frames, width, height } = measureLayerFrames(doc, [], names);
+  const elements = {};
+  Object.keys(frames).forEach((name) => {
+    elements[name] = {
+      leftPercent: roundTo(frames[name].left, 2),
+      topPercent: roundTo(frames[name].top, 2),
+      widthPercent: roundTo(frames[name].width, 2),
+    };
+  });
+  return {
+    outputDocument: ORIGINAL_VARIANT_NAME,
+    width: Math.round(width),
+    height: Math.round(height),
+    elements,
+  };
+}
+
+// 新模組（或草稿）的數值：第一個是「原稿」（跟 PSD 一模一樣），後面是內建樣板（寬度依基準換算）
 function initialValuesForDocument(doc) {
   const values = deepClone(BUILTIN_RESIZE_VALUES);
   values.variants.forEach((variant) =>
     scaleElementsForDocument(variant.elements, doc),
   );
+  if (doc) {
+    try {
+      const original = originalVariantFor(doc);
+      if (INCLUDE_BUILTIN_PRESETS) {
+        values.variants.unshift(original);
+      } else {
+        values.width = original.width;
+        values.height = original.height;
+        values.variants = [original];
+      }
+    } catch (_error) {
+      // 量不到就只用內建樣板
+    }
+  }
   return values;
 }
 
@@ -2479,15 +2583,27 @@ async function readLayerBoundsByIds(docId, layerId) {
   }
 }
 
+// 建立預覽用的暫存文件：連續建立時 createDocument 偶爾回傳 null，稍等再試幾次
+async function createPreviewTempDocument(master) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const temp = await app.createDocument({
+      width: unitNumber(master.width),
+      height: unitNumber(master.height),
+      resolution: 72,
+      mode: constants.NewDocumentMode.RGB,
+      fill: constants.DocumentFill.TRANSPARENT,
+      name: PREVIEW_TEMP_NAME,
+    });
+    if (temp) {
+      return temp;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error("無法建立預覽用的暫存文件，請再試一次");
+}
+
 async function exportLayerPreviewPng(master, layer, file, name, prepare) {
-  const temp = await app.createDocument({
-    width: unitNumber(master.width),
-    height: unitNumber(master.height),
-    resolution: 72,
-    mode: constants.NewDocumentMode.RGB,
-    fill: constants.DocumentFill.TRANSPARENT,
-    name: PREVIEW_TEMP_NAME,
-  });
+  const temp = await createPreviewTempDocument(master);
 
   try {
     const baseIds = new Set(listLayers(temp).map((item) => item.id));
@@ -2832,6 +2948,13 @@ const EMPTY_TEMPLATE_LABEL = "（請按「上傳.psd」）";
 const EMPTY_STATUS = "請按「上傳.psd」選擇 PSD。";
 const DOUBLE_CLICK_MS = 400;
 const TEXT_EDITOR_Z_INDEX = 1000;
+// 預覽區上層的 z-index：一定要高過所有圖層圖片（圖層的 z-index 是層級 + 2）
+const GRID_Z_INDEX = 800;
+const SIZE_LABEL_Z_INDEX = 850;
+const SELECTION_Z_INDEX = 900;
+const SIZE_STEP_PX = 1;
+const SIZE_LABEL_WIDTH = 40;
+const SIZE_LABEL_HEIGHT = 13;
 const DELETE_BUTTON_SIZE = 18;
 const MAX_CANVAS_SIZE = 30000;
 
@@ -3022,6 +3145,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     heightPercent: el("field-heightPercent"),
     rotation: el("field-rotation"),
   };
+  const stretchCheck = el("field-stretch");
+  const hiddenCheck = el("field-hidden");
   const stage = el("preview-stage");
   const templatePicker = el("template-picker");
   const variantPicker = el("variant-picker");
@@ -3038,6 +3163,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     // 獨立樣板自己的文字預覽圖（key：母版 id + 圖層 + 設定）
     overrideImages: {},
     rotatedImages: {},
+    stretchParts: {},
     drag: null,
     images: {},
     selection: null,
@@ -3241,6 +3367,71 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }, 300);
   }
 
+  // 拉伸的群組裡有文字：色塊與文字分開的預覽圖（第一次需要時請 Photoshop 產生）
+  function stretchPartsFor(name) {
+    if (!isDocumentOpen(state.master) || (isApply && applyExtras && applyExtras.replacementFor(name))) {
+      return null;
+    }
+    const key = `${state.master.id}|${name}`;
+    const hit = state.stretchParts[key];
+    if (hit) {
+      return hit.parts || null;
+    }
+    state.stretchParts[key] = { pending: true };
+    const master = state.master;
+    whilePhotoshopBusy(() => buildStretchParts(master, name, mode.required(), layerNames()))
+      .then((parts) => {
+        state.stretchParts[key] = { parts };
+        if (parts && state.master && state.master.id === master.id) {
+          applyElementStyle(name, specForPreview(name));
+        }
+      })
+      .catch((error) => {
+        // 失敗的不快取，下次重畫會再試
+        delete state.stretchParts[key];
+        setStatus(`拉伸預覽失敗（將再試一次）：${describeModalError(error)}`);
+        if (!state.stretchRetry) {
+          state.stretchRetry = setTimeout(() => {
+            state.stretchRetry = null;
+            if (state.master && state.master.id === master.id) {
+              applyElementStyle(name, specForPreview(name));
+            }
+          }, 1000);
+        }
+      });
+    return null;
+  }
+
+  // 預覽 PSD 裡這個 $ 圖層是不是含文字的群組（拉伸時要分開處理）
+  function isGroupLayerName(name) {
+    const key = isDocumentOpen(state.master) ? `${state.master.id}|${name}` : "";
+    const hit = key && state.stretchParts[key];
+    return Boolean(!hit || hit.pending || (hit.parts && hit.parts.text));
+  }
+
+  // 圖片上面疊一張只有文字的圖（拉伸群組用）
+  function textOverlayFor(img, show) {
+    if (!show) {
+      if (img._overlay) {
+        img._overlay.style.display = "none";
+      }
+      return null;
+    }
+    if (!img._overlay) {
+      const overlay = document.createElement("img");
+      overlay.className = "preview-layer";
+      overlay.style.pointerEvents = "none";
+      img._overlay = overlay;
+    }
+    const overlay = img._overlay;
+    if (overlay.parentNode !== stage || overlay.previousSibling !== img) {
+      stage.insertBefore(overlay, img.nextSibling);
+    }
+    overlay.style.zIndex = img.style.zIndex;
+    overlay.style.display = "block";
+    return overlay;
+  }
+
   function isDraftSelected() {
     return state.templateIndex < 0 && Boolean(state.draft);
   }
@@ -3385,16 +3576,49 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 欄位 -----
 
+  // 寬度／長度欄位顯示像素（存檔仍是 %）。記住寫進去的精確 %，
+  // 欄位沒改過就沿用，免得像素四捨五入讓數值每存一次就偏一點
+  const PX_FIELDS = { widthPercent: "width", heightPercent: "height" };
+
+  function percentToPx(key, percent) {
+    return (percent / 100) * canvasSize()[PX_FIELDS[key]];
+  }
+
+  function writePxField(key, percent) {
+    const input = fields[key];
+    input.value = String(roundTo(percentToPx(key, percent), 1));
+    input._shown = input.value;
+    input._percent = percent;
+  }
+
+  function readPxField(key) {
+    const input = fields[key];
+    const px = parseFloat(input.value);
+    if (!Number.isFinite(px)) {
+      return NaN;
+    }
+    if (input.value === input._shown) {
+      return input._percent;
+    }
+    return (px / Math.max(canvasSize()[PX_FIELDS[key]], 1)) * 100;
+  }
+
   function readFieldsAsSpec() {
     const spec = currentSpec() || elementSpec(null, state.elementName);
     const out = {};
     for (const key of SPEC_KEYS) {
-      const n = parseFloat(fields[key].value);
+      const n = PX_FIELDS[key] ? readPxField(key) : parseFloat(fields[key].value);
       out[key] = Number.isFinite(n) ? n : spec[key];
     }
-    const h = parseFloat(fields.heightPercent.value);
+    const h = readPxField("heightPercent");
     if (state.elementName !== "$BG" && Number.isFinite(h) && h > 0) {
       out.heightPercent = h;
+    }
+    if (state.elementName !== "$BG" && hiddenCheck && hiddenCheck.checked) {
+      out.hidden = true;
+    }
+    if (out.heightPercent > 0 && stretchCheck && stretchCheck.checked) {
+      out.stretch = true;
     }
     // 背景要鋪滿，不旋轉
     const r = normalizeAngle(parseFloat(fields.rotation.value));
@@ -3409,12 +3633,26 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function writeFields(spec) {
     for (const key of SPEC_KEYS) {
-      fields[key].value = roundTo(spec[key], 2);
+      if (PX_FIELDS[key]) {
+        writePxField(key, spec[key]);
+      } else {
+        fields[key].value = roundTo(spec[key], 2);
+      }
     }
-    fields.heightPercent.value = hasFrameHeight(spec)
-      ? roundTo(spec.heightPercent, 2)
-      : "";
+    if (hasFrameHeight(spec)) {
+      writePxField("heightPercent", spec.heightPercent);
+    } else {
+      fields.heightPercent.value = "";
+    }
     fields.rotation.value = String(normalizeAngle(spec.rotation || 0));
+    if (hiddenCheck) {
+      hiddenCheck.checked = spec.hidden === true;
+      hiddenCheck.disabled = state.elementName === "$BG";
+    }
+    if (stretchCheck) {
+      stretchCheck.checked = spec.stretch === true;
+      stretchCheck.disabled = state.elementName === "$BG";
+    }
     fields.rotation.disabled = state.elementName === "$BG";
   }
 
@@ -3483,9 +3721,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
       return;
     }
+    // 樣板裡還沒有這個圖層的設定（例如舊樣板之後才加的圖層）就新建一筆，避免拖拉失效
+    if (!variant.elements[state.elementName]) {
+      variant.elements[state.elementName] = {};
+    }
     const target = variant.elements[state.elementName];
     delete target.heightPercent;
     delete target.rotation;
+    delete target.stretch;
+    delete target.hidden;
     delete target.alignX;
     delete target.alignY;
     Object.assign(target, next);
@@ -3507,11 +3751,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const current = parseFloat(input.value);
-    let base = Number.isFinite(current) ? current : 0;
-    if (key === "heightPercent" && !Number.isFinite(current)) {
-      // 不限高度時從圖層目前的高度開始調
-      base = naturalHeightPercent(state.elementName, readFieldsAsSpec());
+    if (PX_FIELDS[key]) {
+      // 寬度／長度以像素調，每次 1px
+      let base = Number.isFinite(current) ? current : 0;
+      if (key === "heightPercent" && !Number.isFinite(current)) {
+        // 不限高度時從圖層目前的高度開始調
+        base = percentToPx(key, naturalHeightPercent(state.elementName, readFieldsAsSpec()));
+      }
+      const max = canvasSize()[PX_FIELDS[key]];
+      input.value = String(roundTo(clampNumber(base + direction * SIZE_STEP_PX, 1, max), 1));
+      return;
     }
+    const base = Number.isFinite(current) ? current : 0;
     const next = Math.min(100, Math.max(0, base + direction * SETTING_STEP));
     input.value = roundTo(next, 2);
   }
@@ -3615,11 +3866,111 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function applyElementStyle(name, spec) {
+    drawElement(name, spec);
+    updateSizeLabels(name, spec);
+  }
+
+  // 每個圖層的上方標寬度、右方標高度（版面像素），拖拉、縮放時跟著變
+  function updateSizeLabels(name, spec) {
+    state.sizeLabels = state.sizeLabels || {};
+    let labels = state.sizeLabels[name];
+    const ratio = heightRatio(name);
+    const shown =
+      readSizeLabelsVisible() &&
+      name !== "$BG" &&
+      !spec.hidden &&
+      ratio > 0 &&
+      state.images[name];
+    if (!shown) {
+      if (labels) {
+        labels.top.style.display = "none";
+        labels.right.style.display = "none";
+      }
+      return;
+    }
+    if (!labels || labels.top.parentNode !== stage) {
+      const make = (side) => {
+        const label = document.createElement("div");
+        label.className = `preview-size-label is-${side}`;
+        label.style.zIndex = String(SIZE_LABEL_Z_INDEX);
+        const anchor = state.selection ? state.selection.box : null;
+        if (anchor) {
+          stage.insertBefore(label, anchor);
+        } else {
+          stage.appendChild(label);
+        }
+        return label;
+      };
+      labels = { top: make("top"), right: make("right") };
+      state.sizeLabels[name] = labels;
+    }
+    const rect = fitInFrame(name, spec, ratio);
+    const canvas = canvasSize();
+    const stageW = Math.max(stage.clientWidth, 1);
+    const stageH = Math.max(stage.clientHeight, 1);
+    const left = (rect.left / 100) * stageW;
+    const top = (rect.top / 100) * stageH;
+    const right = ((rect.left + rect.width) / 100) * stageW;
+    const middle = ((rect.top + rect.height / 2) / 100) * stageH;
+    labels.top.textContent = `${Math.round((rect.width / 100) * canvas.width)}px`;
+    labels.right.textContent = `${Math.round((rect.height / 100) * canvas.height)}px`;
+    labels.top.style.display = "block";
+    labels.right.style.display = "block";
+    // 寬度標在上緣外側（貼齊預覽區頂端時改放在框內）
+    labels.top.style.left = `${clampNumber(left, 0, Math.max(stageW - SIZE_LABEL_WIDTH, 0))}px`;
+    labels.top.style.top = `${clampNumber(top - SIZE_LABEL_HEIGHT - 1, 0, stageH - SIZE_LABEL_HEIGHT)}px`;
+    // 高度標在右緣外側（超出預覽區時改放在框內靠右）
+    const outside = right + 2 + SIZE_LABEL_WIDTH <= stageW;
+    labels.right.style.left = outside ? `${right + 2}px` : "auto";
+    labels.right.style.right = outside ? "auto" : `${Math.max(stageW - right, 0) + 2}px`;
+    labels.right.style.top = `${clampNumber(middle - SIZE_LABEL_HEIGHT / 2, 0, stageH - SIZE_LABEL_HEIGHT)}px`;
+  }
+
+  function drawElement(name, spec) {
     const img = state.images[name];
     if (!img) {
       return;
     }
+    // 這個樣板隱藏的圖層：預覽不顯示（選到時只看得到選取框）
+    img.style.display = spec.hidden ? "none" : "block";
+    if (spec.hidden) {
+      textOverlayFor(img, false);
+      return;
+    }
     const rect = fitInFrame(name, spec, heightRatio(name));
+    const parts = isStretched(name, spec) ? stretchPartsFor(name) : null;
+    const overlay = textOverlayFor(img, Boolean(parts));
+    if (parts) {
+      // 色塊照框拉伸
+      if (img._dataUrl !== parts.bg.dataUrl) {
+        img._dataUrl = parts.bg.dataUrl;
+        img.src = parts.bg.dataUrl;
+      }
+      img.style.left = `${rect.left}%`;
+      img.style.top = `${rect.top}%`;
+      img.style.width = `${rect.width}%`;
+      img.style.height = `${rect.height}%`;
+      // 文字等比縮放（倍率取寬高較小的），位置照在群組裡的比例
+      const stageW = Math.max(stage.clientWidth, 1);
+      const stageH = Math.max(stage.clientHeight, 1);
+      const frameW = (rect.width / 100) * stageW;
+      const frameH = (rect.height / 100) * stageH;
+      const unit = Math.min(frameW / parts.group.width, frameH / parts.group.height);
+      const { textBox } = parts;
+      const textW = textBox.w * parts.group.width * unit;
+      const textH = textBox.h * parts.group.height * unit;
+      const cx = (rect.left / 100) * stageW + textBox.cx * frameW;
+      const cy = (rect.top / 100) * stageH + textBox.cy * frameH;
+      if (overlay._dataUrl !== parts.text.dataUrl) {
+        overlay._dataUrl = parts.text.dataUrl;
+        overlay.src = parts.text.dataUrl;
+      }
+      overlay.style.left = `${((cx - textW / 2) / stageW) * 100}%`;
+      overlay.style.top = `${((cy - textH / 2) / stageH) * 100}%`;
+      overlay.style.width = `${(textW / stageW) * 100}%`;
+      overlay.style.height = `${(textH / stageH) * 100}%`;
+      return;
+    }
     const base = layerImage(name);
     // 新角度的圖還沒好之前，先沿用上一張轉好的圖（依它自己的角度擺），不要跳回沒轉的樣子
     const exact = rotatedImage(name, spec.rotation);
@@ -3636,8 +3987,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       img.style.left = `${rect.left}%`;
       img.style.top = `${rect.top}%`;
       img.style.width = `${rect.width}%`;
+      // 拉伸：高度也照框，不維持比例（含文字的群組在分開的圖還沒好之前先不拉伸，免得字變形）
+      const waiting = isStretched(name, spec) && isGroupLayerName(name);
+      img.style.height = isStretched(name, spec) && !waiting ? `${rect.height}%` : "auto";
       return;
     }
+    img.style.height = "auto";
     // 旋轉後的圖比原本大：以圖層中心為準，寬度＝轉完的外框寬
     const stageW = Math.max(stage.clientWidth, 1);
     const stageH = Math.max(stage.clientHeight, 1);
@@ -3855,6 +4210,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   function layoutPreview() {
     resizeStage();
+    renderGrid(); // 格線圖依預覽區實際大小重畫
+    el("size-label-check").checked = readSizeLabelsVisible();
+    Object.keys(state.images).forEach((name) => {
+      updateSizeLabels(name, specForPreview(name)); // 尺寸標籤用 px 定位，預覽區大小變了要重排
+    });
     updateHighlight();
     if (state.textEditor && state.textEditor.box) {
       positionTextEditor(state.textEditor.box, state.textEditor.name);
@@ -3957,6 +4317,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         stage.insertBefore(img, anchor);
       } else {
         stage.appendChild(img);
+      }
+      if (img._overlay && img._overlay.style.display !== "none") {
+        img._overlay.style.zIndex = img.style.zIndex;
+        stage.insertBefore(img._overlay, img.nextSibling);
       }
     });
     // 格線要在圖片上面：圖片重新排過後再畫一次
@@ -4117,6 +4481,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function renderPreview() {
     stage.innerHTML = "";
     state.images = {};
+    state.sizeLabels = {};
     state.selection = null;
     const cache = state.previewCache;
     if (!cache) {
@@ -4137,7 +4502,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       applyElementStyle(name, specForPreview(name));
     });
 
-    state.selection = createSelection(cache.order.length + 1);
+    state.selection = createSelection(SELECTION_Z_INDEX);
     applyLayerOrder();
     layoutPreview();
   }
@@ -4554,7 +4919,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   // ----- 格線：直 N 條、橫 N 條等分參考線（畫在圖層上面、選取框下面，不擋拖拉） -----
 
   function renderGrid() {
-    stage.querySelectorAll(".preview-grid-line").forEach((line) => {
+    stage.querySelectorAll(".preview-grid-line, .preview-grid-image").forEach((line) => {
       line.parentNode.removeChild(line);
     });
     const grid = readGridSettings();
@@ -4569,10 +4934,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       const line = document.createElement("div");
       line.className = `preview-grid-line ${vertical ? "is-vertical" : "is-horizontal"}`;
       line.style[vertical ? "left" : "top"] = `${percent}%`;
-      // 在所有圖層之上（與選取框同層、排在它前面，選取框和控制點仍在最上面）
-      line.style.zIndex = anchor
-        ? anchor.style.zIndex
-        : String(state.previewCache.order.length + 1);
+      // 在所有圖層之上、選取框之下（圖層的 z-index 會隨層級變大，所以用固定的高值）
+      line.style.zIndex = String(GRID_Z_INDEX);
       if (anchor) {
         stage.insertBefore(line, anchor);
       } else {
@@ -4584,6 +4947,29 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     for (let i = 1; i <= grid.horizontal; i++) {
       addLine(false, (i * 100) / (grid.horizontal + 1));
+    }
+    // UXP 裡有些圖片會蓋過邊框畫的線；圖片之間的上下一定照 DOM 順序，
+    // 所以再疊一張畫好格線的 SVG 圖，放在所有圖層圖片之後，線就一定在圖層上面
+    const w = Math.max(Math.round(stage.clientWidth), 1);
+    const h = Math.max(Math.round(stage.clientHeight), 1);
+    const lines = [];
+    for (let i = 1; i <= grid.vertical; i++) {
+      const x = Math.round((i * w) / (grid.vertical + 1)) + 0.5;
+      lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${h}"/>`);
+    }
+    for (let i = 1; i <= grid.horizontal; i++) {
+      const y = Math.round((i * h) / (grid.horizontal + 1)) + 0.5;
+      lines.push(`<line x1="0" y1="${y}" x2="${w}" y2="${y}"/>`);
+    }
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><g stroke="#3ee6f0" stroke-width="1">${lines.join("")}</g></svg>`;
+    const image = document.createElement("img");
+    image.className = "preview-grid-image";
+    image.src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+    image.style.zIndex = String(GRID_Z_INDEX);
+    if (anchor) {
+      stage.insertBefore(image, anchor);
+    } else {
+      stage.appendChild(image);
     }
   }
 
@@ -4637,6 +5023,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (force) {
       state.overrideImages = {};
       state.rotatedImages = {};
+      state.stretchParts = {};
     }
     const master = state.master;
     if (!isDocumentOpen(master)) {
@@ -5322,6 +5709,103 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
   }
 
+  // ----- 複製圖層：PSD 裡多一個一模一樣的圖層，只在目前的樣板顯示 -----
+
+  async function duplicateLayer() {
+    const name = state.elementName;
+    if (!isDocumentOpen(state.master) || !name) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
+    if (name === "$BG") {
+      await app.showAlert("背景 $BG 不能複製。");
+      return;
+    }
+    commitFields();
+    const master = state.master;
+    const current = currentVariant();
+    setStatus(`複製 ${name} 中…`);
+    let newName;
+    try {
+      newName = await whilePhotoshopBusy(() =>
+        duplicateLayerInMaster(master, name, mode.required(), layerNames()),
+      );
+    } catch (error) {
+      setStatus(`複製圖層失敗：${describeModalError(error)}`);
+      await app.showAlert(`複製圖層失敗：${describeModalError(error)}`);
+      return;
+    }
+    // 每個樣板：新圖層用原圖層在該樣板的位置；只有目前的樣板顯示，其他樣板先隱藏
+    const path = readDocumentPath(master);
+    const owners = templates().filter(
+      (template) => template === currentTemplate() || (template.source && path && template.source.path === path),
+    );
+    if (state.draft && !owners.includes(state.draft)) {
+      owners.push(state.draft);
+    }
+    owners.forEach((template) => {
+      (template.values ? template.values.variants : []).forEach((variant) => {
+        const spec = variant.elements[name] ? deepClone(variant.elements[name]) : null;
+        if (spec) {
+          if (variant === current) {
+            delete spec.hidden;
+          } else {
+            spec.hidden = true;
+          }
+          variant.elements[newName] = spec;
+        }
+        if (variant.textOverrides && variant.textOverrides[name]) {
+          variant.textOverrides[newName] = deepClone(variant.textOverrides[name]);
+        }
+        if (Array.isArray(variant.order) && variant.order.includes(name)) {
+          variant.order.splice(variant.order.indexOf(name) + 1, 0, newName);
+        }
+      });
+    });
+    if (!state.master || state.master.id !== master.id) {
+      return;
+    }
+    refreshExtraNames();
+    state.elementName = newName;
+    renderAll();
+    await refreshPreview(true);
+    const message = `已複製 ${name} → ${newName}（其他樣板預設隱藏，可在「顯示」取消）`;
+    if (currentTemplate() && !isDraftSelected()) {
+      await persist(message, "已複製圖層");
+    } else {
+      setStatus(message);
+      await showToast("已複製圖層");
+    }
+  }
+
+  // ----- 左右對調：以畫面中線為準，目前樣板的圖層左右鏡射（圖片本身不翻轉） -----
+
+  async function mirrorLayout() {
+    const variant = currentVariant();
+    if (!variant) {
+      await app.showAlert(EMPTY_STATUS);
+      return;
+    }
+    commitFields();
+    Object.keys(variant.elements).forEach((name) => {
+      const spec = variant.elements[name];
+      if (!spec || !Number.isFinite(spec.leftPercent) || !Number.isFinite(spec.widthPercent)) {
+        return;
+      }
+      // 框的左右對調：新的靠左% ＝ 100 − 靠左% − 寬度%
+      spec.leftPercent = roundTo(100 - spec.leftPercent - spec.widthPercent, 2);
+    });
+    loadFields();
+    renderPreview();
+    const message = `已將「${variantLabel(variant)}」的圖層左右對調`;
+    if (currentTemplate() && !isDraftSelected()) {
+      await persist(message, "已左右對調");
+    } else {
+      setStatus(message);
+      await showToast("已左右對調");
+    }
+  }
+
   // ----- 模組（template）-----
 
   function selectTemplate(index) {
@@ -5549,18 +6033,39 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       draft.outputDocument = name;
       state.variantIndex = variants.indexOf(draft);
     } else {
-      variants.push({
-        outputDocument: name,
-        elements: deepClone(DEFAULT_VARIANT_ELEMENTS),
-      });
+      // 新樣板＝PSD 原稿的位置、大小與畫布尺寸，再從這裡開始改
+      variants.push({ ...originalLayoutFor(template, variants[state.variantIndex]), outputDocument: name });
       state.variantIndex = variants.length - 1;
     }
+    ensureVariantElements(template);
     variantNameInput.value = "";
 
     renderVariantPicker();
     loadFields();
     renderPreview();
     await persist(`已新增樣板「${name}」`, "成功新增樣板");
+  }
+
+  function documentForTemplate(template) {
+    return template === state.draft ? state.master : findOpenDocumentForTemplate(template);
+  }
+
+  // PSD 原稿的版面（畫布＝PSD 尺寸）；PSD 沒開時複製目前選的樣板
+  function originalLayoutFor(template, fallback) {
+    const doc = documentForTemplate(template);
+    if (isDocumentOpen(doc)) {
+      try {
+        const original = originalVariantFor(doc);
+        return { width: original.width, height: original.height, elements: original.elements };
+      } catch (_error) {
+        // 量不到就改用目前的樣板
+      }
+    }
+    const copy = fallback ? deepClone(fallback) : { elements: deepClone(DEFAULT_VARIANT_ELEMENTS) };
+    delete copy.outputDocument;
+    delete copy.independent;
+    delete copy.textOverrides;
+    return copy;
   }
 
   function defaultElementsFor(template, variant) {
@@ -5575,12 +6080,25 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       }
       return deepClone(variant.elements);
     }
+    // 「原稿」還原成 PSD 目前的位置與大小
+    if (isSameVariantName(variant.outputDocument || "", ORIGINAL_VARIANT_NAME)) {
+      const doc = template === state.draft ? state.master : findOpenDocumentForTemplate(template);
+      if (isDocumentOpen(doc)) {
+        try {
+          return originalVariantFor(doc).elements;
+        } catch (_error) {
+          // 量不到就沿用目前的數值
+        }
+      }
+      return deepClone(variant.elements);
+    }
     // 與內建樣板同名就還原成內建數值（寬度依基準換算成這份 PSD 的比例），其餘還原成置中預設值
     const match = BUILTIN_RESIZE_VALUES.variants.find((item) =>
       isSameVariantName(item.outputDocument, variant.outputDocument || ""),
     );
     if (!match) {
-      return deepClone(DEFAULT_VARIANT_ELEMENTS);
+      // 自己新增的樣板：還原成 PSD 原稿的位置與大小
+      return originalLayoutFor(template, variant).elements;
     }
     const elements = deepClone(match.elements);
     delete elements.$BG;
@@ -5607,6 +6125,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     // $BG 不在預設值內，還原後回到自動 cover
     variant.elements = defaultElementsFor(template, variant);
     delete variant.order;
+    // 自己新增、還沒設過畫布尺寸的樣板：畫布也改成 PSD 原稿的尺寸
+    const builtin = BUILTIN_RESIZE_VALUES.variants.some((item) =>
+      isSameVariantName(item.outputDocument, variant.outputDocument || ""),
+    );
+    if (!builtin && !(variant.width > 0 && variant.height > 0)) {
+      const layout = originalLayoutFor(template, variant);
+      if (layout.width > 0 && layout.height > 0) {
+        variant.width = layout.width;
+        variant.height = layout.height;
+        resizeStage();
+      }
+    }
     loadFields();
     renderPreview();
     await persist(`已將「${variantLabel(variant)}」還原為預設值。`);
@@ -5695,6 +6225,22 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   for (const key of FIELD_KEYS) {
     fields[key].addEventListener("input", updatePreviewFromFields);
   }
+  if (hiddenCheck) {
+    hiddenCheck.addEventListener("change", () => {
+      updatePreviewFromFields();
+      commitFields();
+    });
+  }
+  if (stretchCheck) {
+    stretchCheck.addEventListener("change", () => {
+      // 拉伸要有框高：沒設高度%就先用圖層目前的高度
+      if (stretchCheck.checked && !(parseFloat(fields.heightPercent.value) > 0)) {
+        writePxField("heightPercent", naturalHeightPercent(state.elementName, readFieldsAsSpec()));
+      }
+      updatePreviewFromFields();
+      commitFields();
+    });
+  }
 
   templatePicker.addEventListener("change", (event) => {
     const entry = (state.templateEntries || [])[readPickerIndex(event)];
@@ -5732,9 +6278,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-upload-psd").addEventListener("click", uploadPsd);
   el("btn-add-template").addEventListener("click", addTemplate);
   el("btn-add-variant").addEventListener("click", addVariant);
-  el("btn-refresh-preview").addEventListener("click", () =>
-    refreshPreview(true),
-  );
+  el("btn-duplicate-layer").addEventListener("click", duplicateLayer);
+  el("btn-mirror-layout").addEventListener("click", mirrorLayout);
   el("btn-reset-defaults").addEventListener("click", resetVariant);
   el("btn-add-text").addEventListener("click", addText);
   el("text-font-family").addEventListener("change", (event) => {
@@ -5801,6 +6346,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   el("btn-grid-confirm-ok").addEventListener("click", () =>
     el("grid-dialog").close("confirm"),
   );
+  // 「寬高」勾選：顯示／隱藏每個圖層上方、右方的尺寸標籤（兩個分頁共用，記在本機）
+  el("size-label-check").checked = readSizeLabelsVisible();
+  el("size-label-check").addEventListener("change", () => {
+    writeSizeLabelsVisible(el("size-label-check").checked);
+    layoutPreview();
+  });
   if (el("independent-check")) {
     el("independent-check").addEventListener("change", () => {
       const variant = currentVariant();
@@ -7498,6 +8049,93 @@ async function buildRotatedPreviewNow(
   };
 }
 
+let stretchPartsSeq = 0;
+
+// 拉伸的群組：分開匯出「只有色塊」和「只有文字」兩張預覽圖（文字要等比縮放，不能跟著拉伸）；
+// 不是含文字的群組回傳 null
+async function buildStretchParts(master, layerName, required, names) {
+  const tempFolder = await localFileSystem.getTemporaryFolder();
+  stretchPartsSeq += 1;
+  const stamp = `${master.id}-${Date.now()}-${stretchPartsSeq}`;
+  const bgFile = await tempFolder.createFile(`preview-stretch-bg-${stamp}.png`, { overwrite: true });
+  const textFile = await tempFolder.createFile(`preview-stretch-text-${stamp}.png`, { overwrite: true });
+  let result = null;
+  await runModal(async () => {
+    await closeLeftoverPreviewDocuments();
+    const container = getMcdSourceContainer(master, required, names);
+    const layer = findNamedLayer(container, layerName);
+    if (!layer) {
+      throw new Error(`找不到圖層 ${layerName}`);
+    }
+    const texts = canSearchChildren(layer) ? collectTextLayers(layer) : [];
+    if (!texts.length) {
+      return;
+    }
+    const group = boundsBox(layer);
+    const box = texts.map(readLayerBounds).reduce((a, b) => ({
+      left: Math.min(a.left, b.left),
+      top: Math.min(a.top, b.top),
+      right: Math.max(a.right, b.right),
+      bottom: Math.max(a.bottom, b.bottom),
+    }));
+    // 在暫存文件的複本裡刪掉不要的圖層
+    const removeFrom = (keepText) => async (temp, copy) => {
+      const ids = [];
+      (function walk(node) {
+        for (const child of listLayers(node)) {
+          if (isTextLayer(child)) {
+            if (!keepText) {
+              ids.push(child.id);
+            }
+          } else if (canSearchChildren(child)) {
+            walk(child);
+          } else if (keepText) {
+            ids.push(child.id);
+          }
+        }
+      })(copy);
+      if (ids.length) {
+        await action.batchPlay(
+          ids.map((id) => ({ _obj: "delete", _target: [{ _ref: "layer", _id: id }] })),
+          { synchronousExecution: true },
+        );
+      }
+      app.activeDocument = temp;
+    };
+    try {
+      const bg = await exportLayerPreviewPng(master, layer, bgFile, layerName, removeFrom(false));
+      const text = await exportLayerPreviewPng(master, layer, textFile, layerName, removeFrom(true));
+      result = {
+        bg,
+        text,
+        group: { width: group.width, height: group.height },
+        // 文字在群組裡的位置（0～1）與大小（佔群組的比例）
+        textBox: {
+          cx: ((box.left + box.right) / 2 - group.left) / group.width,
+          cy: ((box.top + box.bottom) / 2 - group.top) / group.height,
+          w: (box.right - box.left) / group.width,
+          h: (box.bottom - box.top) / group.height,
+        },
+      };
+    } finally {
+      await closeLeftoverPreviewDocuments();
+      if (isDocumentOpen(master)) {
+        app.activeDocument = master;
+      }
+    }
+  }, "擷取拉伸預覽");
+  if (!result) {
+    return null;
+  }
+  const toImage = async (file, size) => {
+    const buffer = await file.read({ format: formats.binary });
+    return { ...size, dataUrl: `data:image/png;base64,${arrayBufferToBase64(buffer)}` };
+  };
+  result.bg = await toImage(bgFile, result.bg);
+  result.text = await toImage(textFile, result.text);
+  return result;
+}
+
 // 讀出圖層裡的文字：[{ name, text }]，沒有文字回傳空陣列
 async function readEditableTexts(master, layerName, required, names) {
   let texts = [];
@@ -8305,6 +8943,41 @@ async function deleteLayerFromMaster(master, layerName, required, names) {
   }, "刪除文字區塊");
 }
 
+// 複製圖層（放在原圖層正上方）並存檔；新名稱＝去掉結尾數字＋下一個沒用過的號碼（$SUBTEXT1 → $SUBTEXT2）
+async function duplicateLayerInMaster(master, layerName, required, names) {
+  let newName = "";
+  await runModal(async () => {
+    app.activeDocument = master;
+    const container = getMcdSourceContainer(master, required, names);
+    const layer = findNamedLayer(container, layerName);
+    if (!layer) {
+      throw new Error(`找不到圖層 ${layerName}`);
+    }
+    const existing = allLayerNamesIn(master);
+    const base = layerName.replace(/\d+$/, "");
+    let n = 2;
+    while (existing.has(`${base}${n}`)) {
+      n += 1;
+    }
+    newName = `${base}${n}`;
+    let copy = null;
+    if (typeof layer.duplicate === "function") {
+      copy = await layer.duplicate();
+    }
+    if (copy) {
+      copy.name = newName;
+    } else {
+      await selectOnlyLayer(layer);
+      await action.batchPlay(
+        [{ _obj: "duplicate", _target: [{ _ref: "layer", _id: layer.id }], name: newName }],
+        { synchronousExecution: true },
+      );
+    }
+    await master.save();
+  }, "複製圖層");
+  return newName;
+}
+
 // ---------- 預覽格線（等分參考線；存在這台電腦，兩個分頁共用） ----------
 
 const GRID_SETTINGS_KEY = "bannerResizer.grid";
@@ -8323,6 +8996,24 @@ function readGridSettings() {
     };
   } catch (_error) {
     return { ...DEFAULT_GRID };
+  }
+}
+
+const SIZE_LABELS_KEY = "bannerResizer.sizeLabels";
+
+function readSizeLabelsVisible() {
+  try {
+    return localStorage.getItem(SIZE_LABELS_KEY) === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function writeSizeLabelsVisible(visible) {
+  try {
+    localStorage.setItem(SIZE_LABELS_KEY, visible ? "1" : "0");
+  } catch (_error) {
+    // 存不了就只在這次使用
   }
 }
 

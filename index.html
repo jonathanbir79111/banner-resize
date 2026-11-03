@@ -186,6 +186,29 @@
       }
 
       /* 格線用邊框畫（跟選取框一樣）：UXP 裡背景色會被圖片蓋住，邊框不會 */
+      .preview-grid-image {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+
+      /* 圖層上方的寬度、右方的長度（px） */
+      .preview-size-label {
+        position: absolute;
+        height: 13px;
+        line-height: 13px;
+        padding: 0 3px;
+        font-size: 9px;
+        color: white;
+        background: rgba(13, 102, 208, 0.85);
+        border-radius: 2px;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+
       .preview-grid-line {
         position: absolute;
         pointer-events: none;
@@ -338,6 +361,28 @@
 
       .text-editor-hint {
         white-space: normal;
+      }
+
+      .settings-field-row .stretch-label {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        text-align: left;
+        color: white;
+        font-size: 12px;
+      }
+
+      /* 勾選框不要套用輸入框的樣式（白底、內距會把它撐高） */
+      .settings-field-row .stretch-label input[type="checkbox"] {
+        flex: 0 0 auto;
+        width: auto;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: none;
       }
 
       .field-unit {
@@ -727,6 +772,11 @@
       }
 
       /* 狀態列：錯誤訊息要看得到，不用 .hint 的深灰字 */
+      /* 狀態文字已隱藏：按鈕靠右排 */
+      .preview-bar:not(.module-folder-bar) {
+        justify-content: flex-end;
+      }
+
       .preview-bar .hint {
         margin: 0;
         flex: 1;
@@ -913,7 +963,11 @@
             <div class="preview-stage" data-role="preview-stage"></div>
           </div>
           <div class="preview-bar">
-            <span data-role="preview-status" class="hint"></span>
+            <span data-role="preview-status" class="hint" style="display: none"></span>
+            <label class="independent-label" title="在每個圖層上方顯示寬度、右方顯示長度（px）">
+              <input type="checkbox" data-role="size-label-check" />
+              寬高
+            </label>
             <label
               class="independent-label"
               title="勾選後按「儲存設定值」：這個樣板的文字與圖層大小獨立，不和其他樣板共用"
@@ -928,8 +982,11 @@
             <button type="button" data-role="btn-reset-defaults">
               還原預設值
             </button>
-            <button type="button" data-role="btn-refresh-preview">
-              重新擷取圖層
+            <button type="button" data-role="btn-duplicate-layer">
+              複製圖層
+            </button>
+            <button type="button" data-role="btn-mirror-layout">
+              左右對調
             </button>
           </div>
 
@@ -1309,7 +1366,7 @@
               </div>
             </div>
             <div class="settings-field-row">
-              <label>寬度%</label>
+              <label>寬度(px)</label>
               <input
                 type="text"
                 inputmode="decimal"
@@ -1333,7 +1390,7 @@
               </div>
             </div>
             <div class="settings-field-row">
-              <label>高度%</label>
+              <label>長度(px)</label>
               <input
                 type="text"
                 inputmode="decimal"
@@ -1357,6 +1414,20 @@
                   ▼
                 </button>
               </div>
+            </div>
+            <div class="settings-field-row">
+              <label>顯示</label>
+              <label class="stretch-label">
+                <input type="checkbox" data-role="field-hidden" />
+                在此樣板隱藏這個圖層
+              </label>
+            </div>
+            <div class="settings-field-row">
+              <label>填滿</label>
+              <label class="stretch-label">
+                <input type="checkbox" data-role="field-stretch" />
+                拉伸填滿框（不維持比例，適合色塊／背景）
+              </label>
             </div>
             <div class="settings-field-row">
               <label>角度</label>
@@ -1619,7 +1690,11 @@
             <div class="preview-stage" data-role="preview-stage"></div>
           </div>
           <div class="preview-bar">
-            <span data-role="preview-status" class="hint"></span>
+            <span data-role="preview-status" class="hint" style="display: none"></span>
+            <label class="independent-label" title="在每個圖層上方顯示寬度、右方顯示長度（px）">
+              <input type="checkbox" data-role="size-label-check" />
+              寬高
+            </label>
             <button type="button" data-role="btn-canvas-size">
               調整版面尺寸
             </button>
@@ -1627,8 +1702,11 @@
             <button type="button" data-role="btn-reset-defaults">
               還原預設值
             </button>
-            <button type="button" data-role="btn-refresh-preview">
-              重新擷取圖層
+            <button type="button" data-role="btn-duplicate-layer">
+              複製圖層
+            </button>
+            <button type="button" data-role="btn-mirror-layout">
+              左右對調
             </button>
           </div>
 
@@ -2008,7 +2086,7 @@
               </div>
             </div>
             <div class="settings-field-row">
-              <label>寬度%</label>
+              <label>寬度(px)</label>
               <input
                 type="text"
                 inputmode="decimal"
@@ -2032,7 +2110,7 @@
               </div>
             </div>
             <div class="settings-field-row">
-              <label>高度%</label>
+              <label>長度(px)</label>
               <input
                 type="text"
                 inputmode="decimal"
@@ -2056,6 +2134,20 @@
                   ▼
                 </button>
               </div>
+            </div>
+            <div class="settings-field-row">
+              <label>顯示</label>
+              <label class="stretch-label">
+                <input type="checkbox" data-role="field-hidden" />
+                在此樣板隱藏這個圖層
+              </label>
+            </div>
+            <div class="settings-field-row">
+              <label>填滿</label>
+              <label class="stretch-label">
+                <input type="checkbox" data-role="field-stretch" />
+                拉伸填滿框（不維持比例，適合色塊／背景）
+              </label>
             </div>
             <div class="settings-field-row">
               <label>角度</label>
