@@ -2033,6 +2033,13 @@ async function layoutInFrame(layer, frame, spec, name) {
     }
     return;
   }
+  if (isStretched(name, spec) && isSmartObject(layer)) {
+    // 智慧型物件整個拉伸會讓裡面的字變形：轉成圖層，文字才能分開等比縮放（只改產出的文件）
+    const converted = await convertSmartObjectToLayers(layer);
+    if (converted) {
+      layer = converted;
+    }
+  }
   const canvasW = frame.right - frame.left;
   const canvasH = frame.bottom - frame.top;
   const src = boundsBox(layer);
@@ -2044,7 +2051,9 @@ async function layoutInFrame(layer, frame, spec, name) {
     const scaleY = Math.max((canvasH * rect.height) / 100 / src.height, 0.01);
     await scaleLayerXY(layer, scaleX, scaleY);
     // 群組裡的文字不要跟著變形：反向縮回來，改成等比縮放（倍率取寬高較小的那個），位置照比例
-    if (canSearchChildren(layer)) {
+    if (isTextLayer(layer)) {
+      await scaleLayerXY(layer, Math.min(scaleX, scaleY) / scaleX, Math.min(scaleX, scaleY) / scaleY);
+    } else if (canSearchChildren(layer)) {
       const uniform = Math.min(scaleX, scaleY);
       for (const text of collectTextLayers(layer)) {
         await scaleLayerXY(text, uniform / scaleX, uniform / scaleY);
@@ -2305,6 +2314,10 @@ function originalVariantFor(doc) {
       topPercent: roundTo(frames[name].top, 2),
       widthPercent: roundTo(frames[name].width, 2),
     };
+    // 高度也照 PSD（背景固定滿版，不設框高）
+    if (name !== "$BG" && frames[name].height > 0) {
+      elements[name].heightPercent = roundTo(frames[name].height, 2);
+    }
   });
   return {
     outputDocument: ORIGINAL_VARIANT_NAME,
@@ -2390,6 +2403,167 @@ async function activateDocument(doc) {
       app.activeDocument = doc;
     }
   }, "切換文件");
+}
+
+// 打開（或找到已開啟的）PSD，量出每個 $ 圖層的位置大小；原本沒開的量完就關掉，不存檔。
+// 有 master 時，樣板 PSD 有、母版沒有的 $ 圖層會複製進母版並存檔（預覽和產出都從母版拿圖層）
+async function measurePsdLayout(file, master, masterNames) {
+  let layout = null;
+  const copied = [];
+  await runModal(async () => {
+    const opened = findOpenDocumentByPath(file.nativePath);
+    const doc = opened || (await app.open(file)) || app.activeDocument;
+    try {
+      // 同名的 $ 圖層編號成 $Subtext、$Subtext2…；直接拿圖層本身量位置、複製，不靠名稱找
+      const { kept, extra } = planDuplicateDollarLayers(doc);
+      const isMaster = Boolean(master) && doc.id === master.id;
+      if (isMaster && extra.length) {
+        // 這份就是母版：新名稱要寫進 PSD，預覽和產出才分得出是哪一個
+        extra.forEach(({ layer, to }) => {
+          layer.name = to;
+        });
+        await doc.save();
+      }
+      layout = originalVariantFor(doc);
+      if (!Object.keys(layout.elements).length) {
+        throw new Error("找不到 $ 開頭的圖層");
+      }
+      const sources = {};
+      [...kept, ...extra].forEach(({ layer, to }) => {
+        sources[to] = layer;
+        layout.elements[to] = layerFrameIn(doc, layer, to);
+      });
+      layout.renamed = extra.map(({ from, to }) => `${from} → ${to}`);
+      if (master && isDocumentOpen(master) && !isMaster) {
+        const missing = Object.keys(layout.elements).filter(
+          (name) => !masterNames.includes(name),
+        );
+        const container = getMcdSourceContainer(master, [], masterNames);
+        for (const name of missing) {
+          const layer = sources[name] || findLayerByName(doc, name);
+          if (!layer) {
+            continue;
+          }
+          const before = allLayerIdsIn(master);
+          app.activeDocument = doc;
+          await doc.duplicateLayers([layer], master);
+          app.activeDocument = master;
+          // 新出現的那個圖層就是複本（不靠名稱找，同名時才不會找錯），名稱改成要的
+          const copy = findLayerWhere(master, (item) => !before.has(item.id));
+          if (!copy) {
+            continue;
+          }
+          copy.name = name;
+          if (container !== master && typeof copy.move === "function") {
+            // 母版用工作區域時放進同一個工作區域，才找得到
+            await copy.move(container, constants.ElementPlacement.PLACEINSIDE);
+          }
+          copied.push(name);
+        }
+        if (copied.length) {
+          await master.save();
+        }
+      }
+    } finally {
+      if (!opened) {
+        await closeDocumentQuietly(doc);
+      }
+    }
+  }, "讀取樣板 PSD");
+  return { ...layout, copied };
+}
+
+function allLayerIdsIn(doc) {
+  const ids = new Set();
+  (function walk(node) {
+    for (const layer of listLayers(node)) {
+      ids.add(layer.id);
+      if (canSearchChildren(layer)) {
+        walk(layer);
+      }
+    }
+  })(doc);
+  return ids;
+}
+
+function findLayerWhere(container, test) {
+  for (const layer of listLayers(container)) {
+    if (test(layer)) {
+      return layer;
+    }
+    if (canSearchChildren(layer)) {
+      const nested = findLayerWhere(layer, test);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
+}
+
+// 單一圖層在 PSD 版面上的位置大小（%），算法同 measureLayerFrames／originalVariantFor
+function layerFrameIn(doc, layer, name) {
+  const container = getMcdSourceContainer(doc, [], dollarLayerNames(doc));
+  const frame =
+    container === doc
+      ? { left: 0, top: 0, right: unitNumber(doc.width), bottom: unitNumber(doc.height) }
+      : readLayerBounds(container);
+  const width = Math.max(frame.right - frame.left, 1);
+  const height = Math.max(frame.bottom - frame.top, 1);
+  const b = readLayerBounds(layer);
+  const spec = {
+    leftPercent: roundTo(((b.left - frame.left) / width) * 100, 2),
+    topPercent: roundTo(((b.top - frame.top) / height) * 100, 2),
+    widthPercent: roundTo(((b.right - b.left) / width) * 100, 2),
+  };
+  if (name !== "$BG" && b.bottom > b.top) {
+    spec.heightPercent = roundTo(((b.bottom - b.top) / height) * 100, 2);
+  }
+  return spec;
+}
+
+// 同名的 $ 圖層：畫面上最上面（同高度再看最左）的保留原名，其餘依序編成 名稱2、名稱3…
+// （例如兩個 $Subtext → $Subtext、$Subtext2）。不改 PSD；回傳 { kept: [{ layer, to }], extra: [{ layer, from, to }] }
+function planDuplicateDollarLayers(doc) {
+  const groups = {};
+  (function walk(node) {
+    for (const layer of listLayers(node)) {
+      const name = String(layer.name || "").trim();
+      if (name.startsWith("$") && name.length > 1) {
+        (groups[name] = groups[name] || []).push(layer);
+      }
+      if (canSearchChildren(layer)) {
+        walk(layer);
+      }
+    }
+  })(doc);
+  const used = new Set(Object.keys(groups));
+  const kept = [];
+  const extra = [];
+  Object.keys(groups).forEach((name) => {
+    const list = groups[name];
+    if (list.length < 2) {
+      return;
+    }
+    const position = new Map(list.map((layer) => [layer, readLayerBounds(layer)]));
+    list.sort(
+      (a, b) =>
+        position.get(a).top - position.get(b).top ||
+        position.get(a).left - position.get(b).left,
+    );
+    kept.push({ layer: list[0], to: name });
+    const base = name.replace(/\d+$/, "");
+    let n = 2;
+    list.slice(1).forEach((layer) => {
+      while (used.has(`${base}${n}`)) {
+        n += 1;
+      }
+      const to = `${base}${n}`;
+      used.add(to);
+      extra.push({ layer, from: name, to });
+    });
+  });
+  return { kept, extra };
 }
 
 async function openPsdAsMaster(file) {
@@ -2611,7 +2785,7 @@ async function exportLayerPreviewPng(master, layer, file, name, prepare) {
     app.activeDocument = temp;
     // 跨文件複製時 duplicateLayers 的回傳值可能指向錯的文件／圖層（讀到的邊界會是 0），
     // 所以不用回傳值，直接到暫存文件裡重新找：先依名稱，再找「不是原本空白圖層」的那個
-    const copy =
+    let copy =
       findLayerByName(temp, layer.name) ||
       listLayers(temp).find((item) => !baseIds.has(item.id)) ||
       null;
@@ -2626,8 +2800,11 @@ async function exportLayerPreviewPng(master, layer, file, name, prepare) {
       // 唯讀屬性略過
     }
     if (prepare) {
-      // 例如獨立樣板：先套上自己的文字再匯出
-      await prepare(temp, copy);
+      // 例如獨立樣板：先套上自己的文字再匯出；回傳 { replacedLayer } 表示複本被換掉了（例如智慧型物件轉成圖層）
+      const prepared = await prepare(temp, copy);
+      if (prepared && prepared.replacedLayer) {
+        copy = prepared.replacedLayer;
+      }
       app.activeDocument = temp;
     }
 
@@ -2975,6 +3152,7 @@ function roundPercent(value) {
 //   remove(item) 從資料中移除並調整選取
 //   afterChange() 資料變動後重畫面板
 //   deletedMessage(item)
+//   reorder(items) 可省略；有的話每列多 ▲▼ 調順序，按「儲存」才套用
 // ctx: { el(role) 找面板元素, beforeOpen() 開視窗前先寫回欄位, persist(message, toast) 存檔 }
 function createListManager(config, ctx) {
   const role = (suffix) => ctx.el(`${config.prefix}${suffix}`);
@@ -3052,6 +3230,21 @@ function createListManager(config, ctx) {
           showView(true);
         }),
       );
+      if (config.reorder) {
+        // ▲ 往前排、▼ 往後排
+        const index = rows.indexOf(row);
+        const move = (to) => () => {
+          rows.splice(index, 1);
+          rows.splice(to, 0, row);
+          renderList();
+        };
+        const up = makeButton("▲", index === 0, move(index - 1));
+        const down = makeButton("▼", index === rows.length - 1, move(index + 1));
+        up.classList.add("move-btn");
+        down.classList.add("move-btn");
+        line.appendChild(up);
+        line.appendChild(down);
+      }
 
       ui.list.appendChild(line);
     });
@@ -3071,7 +3264,7 @@ function createListManager(config, ctx) {
     showView(false);
     showDialog(ui.dialog, config.title, {
       resize: "both",
-      size: { width: 460, height: 320 },
+      size: { width: config.reorder ? 540 : 460, height: 320 },
     });
   }
 
@@ -3112,6 +3305,9 @@ function createListManager(config, ctx) {
         config.setName(row.item, row.name.trim());
       }
     });
+    if (config.reorder) {
+      config.reorder(rows.map((row) => row.item));
+    }
     ui.dialog.close("save");
     config.afterChange();
     await ctx.persist("已儲存改動", "已儲存改動");
@@ -3153,6 +3349,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   const elementPicker = el("element-picker");
   const templateNameInput = el("template-name");
   const variantNameInput = el("variant-name");
+  // 新增樣板時的母體（Resize 才有）
+  const variantBasePicker = el("variant-base-picker");
 
   const state = {
     master: null,
@@ -3164,6 +3362,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     overrideImages: {},
     rotatedImages: {},
     stretchParts: {},
+    stretchFailures: {},
+    stretchGeneration: 0,
     drag: null,
     images: {},
     selection: null,
@@ -3379,14 +3579,34 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     state.stretchParts[key] = { pending: true };
     const master = state.master;
+    // 重新擷取（例如改完文字）之後，之前還在跑的結果是舊的，不要寫回來
+    const generation = state.stretchGeneration;
     whilePhotoshopBusy(() => buildStretchParts(master, name, mode.required(), layerNames()))
       .then((parts) => {
+        if (generation !== state.stretchGeneration) {
+          return;
+        }
         state.stretchParts[key] = { parts };
-        if (parts && state.master && state.master.id === master.id) {
+        delete state.stretchFailures[key];
+        if (state.master && state.master.id === master.id) {
           applyElementStyle(name, specForPreview(name));
         }
       })
       .catch((error) => {
+        if (generation !== state.stretchGeneration) {
+          return;
+        }
+        const failures = (state.stretchFailures[key] || 0) + 1;
+        state.stretchFailures[key] = failures;
+        if (failures >= STRETCH_MAX_TRIES) {
+          // 一直失敗就不再重試：先整張拉伸（字會稍微變形），並把原因告訴使用者
+          state.stretchParts[key] = { parts: null, failed: true };
+          applyElementStyle(name, specForPreview(name));
+          app.showAlert(
+            `${name} 的拉伸預覽產生失敗，預覽先整張拉伸（輸出不受影響）：${describeModalError(error)}`,
+          );
+          return;
+        }
         // 失敗的不快取，下次重畫會再試
         delete state.stretchParts[key];
         setStatus(`拉伸預覽失敗（將再試一次）：${describeModalError(error)}`);
@@ -3406,6 +3626,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function isGroupLayerName(name) {
     const key = isDocumentOpen(state.master) ? `${state.master.id}|${name}` : "";
     const hit = key && state.stretchParts[key];
+    // 失敗放棄（failed）時 parts 是 null，回傳 false，預覽就整張拉伸
     return Boolean(!hit || hit.pending || (hit.parts && hit.parts.text));
   }
 
@@ -3559,7 +3780,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (!editable.includes(state.elementName)) {
       state.elementName = editable[0];
     }
-    if (template && !template.values.variants.length) {
+    // Resize 的空模組（還沒上傳樣板、沒有母版）維持空的，等「上傳」加樣板
+    const emptyResizeModule = !isApply && template && !template.source && !template.builtin;
+    if (template && !template.values.variants.length && !emptyResizeModule) {
       // 沒有任何版型時先放一個未命名草稿，讓使用者可以直接拖拉再命名
       template.values.variants.push(newDraftVariant());
     }
@@ -3780,7 +4003,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (state.draft) {
       entries.unshift({ label: state.draft.label, index: -1 });
     } else if (isNothingSelected()) {
-      entries.unshift({ label: EMPTY_TEMPLATE_LABEL, index: -1 });
+      entries.unshift({
+        label: isApply ? EMPTY_TEMPLATE_LABEL : "（請輸入名稱新增模組）",
+        index: -1,
+      });
     }
     state.templateEntries = entries;
     fillPicker(
@@ -3814,6 +4040,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         variantPicker,
         isApply ? state.outputIndex : state.variantIndex,
       );
+    }
+    if (variantBasePicker) {
+      // 母體預設跟著目前選的 Resize 樣板，可以另外選
+      fillPicker(variantBasePicker, labels.length ? labels : ["（請先上傳樣板）"]);
+      setPickerIndex(variantBasePicker, labels.length ? state.variantIndex : 0);
     }
     updateVariantNameValidity();
   }
@@ -4025,7 +4256,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     sel.handles.forEach(({ node }) => {
       node.style.display = hidden ? "none" : "block";
     });
-    const deletable = !hidden && EXTRA_TEXT_PATTERN.test(state.elementName);
+    // 已在這個樣板隱藏的圖層不再顯示 ×
+    const deletable =
+      !hidden && isDeletableLayer(state.elementName) && !readFieldsAsSpec().hidden;
     if (sel.remove) {
       sel.remove.style.display = deletable ? "block" : "none";
     }
@@ -4249,7 +4482,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       stage.appendChild(node);
       return { corner, node };
     });
-    // 「新增文字」的文字區塊右上角有 ×，可以刪除
+    // 選到的圖層右上角有 ×，可以刪除
     const remove = document.createElement("div");
     remove.className = "preview-delete";
     remove.textContent = "×";
@@ -5024,6 +5257,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       state.overrideImages = {};
       state.rotatedImages = {};
       state.stretchParts = {};
+      state.stretchFailures = {};
+      state.stretchGeneration += 1;
     }
     const master = state.master;
     if (!isDocumentOpen(master)) {
@@ -5610,61 +5845,36 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     await showToast("已更新文字樣式");
   }
 
-  // ----- 刪除文字區塊（$TEXTn 右上角的 ×） -----
+  // ----- 移除圖層（選到的圖層右上角的 ×）：只在目前的樣板隱藏，PSD 和其他樣板都不動 -----
+
+  // PSD 裡有的 $ 圖層都可以移除（背景 $BG 除外）
+  function isDeletableLayer(name) {
+    return name !== "$BG" && (state.extraNames || []).includes(name);
+  }
 
   async function deleteTextBlock() {
     const name = state.elementName;
-    if (!EXTRA_TEXT_PATTERN.test(name) || !isDocumentOpen(state.master)) {
+    const variant = currentVariant();
+    if (!variant || !isDeletableLayer(name)) {
       return;
     }
-    el("delete-text-message").textContent = `請問要刪除文字區塊「${name}」嗎？`;
-    if (!(await showDialog(el("delete-text-dialog"), "刪除文字區塊"))) {
+    el("delete-text-message").textContent =
+      `確認要在「${variantLabel(variant)}」移除圖層「${name}」嗎？（只影響這個樣板，其他樣板不變；之後可在「顯示」取消隱藏）`;
+    if (!(await showDialog(el("delete-text-dialog"), "移除圖層"))) {
       return;
+    }
+    if (hiddenCheck) {
+      hiddenCheck.checked = true;
     }
     commitFields();
-    const master = state.master;
-    try {
-      await whilePhotoshopBusy(() =>
-        deleteLayerFromMaster(master, name, mode.required(), layerNames()),
-      );
-    } catch (error) {
-      setStatus(`刪除失敗：${describeModalError(error)}`);
-      await app.showAlert(`刪除失敗：${describeModalError(error)}`);
-      return;
-    }
-    // 同一份 PSD 的模組一併拿掉這個圖層的位置
-    const path = readDocumentPath(master);
-    const owners = templates().filter(
-      (template) =>
-        template === currentTemplate() ||
-        (template.source && path && template.source.path === path),
-    );
-    if (state.draft) {
-      owners.push(state.draft);
-    }
-    owners.forEach((template) => {
-      (template.values ? template.values.variants : []).forEach((variant) => {
-        delete variant.elements[name];
-        if (variant.textOverrides) {
-          delete variant.textOverrides[name];
-        }
-        if (Array.isArray(variant.order)) {
-          variant.order = variant.order.filter((item) => item !== name);
-        }
-      });
-    });
-    refreshExtraNames();
-    state.elementName = editableNames()[0];
-    renderAll();
-    if (state.master && state.master.id === master.id) {
-      await refreshPreview(true);
-    }
-    const message = `已刪除文字區塊 ${name}`;
+    loadFields();
+    renderPreview();
+    const message = `已在「${variantLabel(variant)}」移除圖層 ${name}`;
     if (currentTemplate() && !isDraftSelected()) {
-      await persist(message, "已刪除文字區塊");
+      await persist(message, "已移除圖層");
     } else {
       setStatus(message);
-      await showToast("已刪除文字區塊");
+      await showToast("已移除圖層");
     }
   }
 
@@ -5839,6 +6049,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       refreshPreview(false);
       return;
     }
+    if (!isApply && template && !template.source && !template.builtin) {
+      // 還沒上傳樣板的空模組：沒有母版，預覽清空
+      state.master = null;
+      state.previewCache = null;
+      renderPreview();
+      return;
+    }
     if (!template || !template.source) {
       refreshPreview(false);
       return;
@@ -5964,6 +6181,28 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       setStatus(`模組「${name}」已存在。`);
       return;
     }
+    if (!isApply) {
+      // Resize：模組先建成空的，之後用「上傳」加樣板（第一個上傳的 PSD 當母版）
+      commitFields();
+      state.draft = null;
+      templates().push({
+        name,
+        values: {
+          width: BUILTIN_RESIZE_VALUES.width,
+          height: BUILTIN_RESIZE_VALUES.height,
+          variants: [],
+        },
+      });
+      state.templateIndex = templates().length - 1;
+      state.variantIndex = 0;
+      state.master = null;
+      state.previewCache = null;
+      templateNameInput.value = "";
+      templateNameInput.classList.remove("is-invalid", "is-suggested");
+      renderAll();
+      await persist(`已新增模組「${name}」，請按「上傳」加入樣板`, "成功新增模組");
+      return;
+    }
     if (!isDocumentOpen(state.master)) {
       setStatus("請先按「上傳.psd」選擇母版。");
       return;
@@ -6029,7 +6268,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     commitFields();
     // 有未命名的草稿（剛新增模組時的第 0 筆）就直接替它命名，保留使用者拖拉過的位置
     const draft = variants.find((variant) => !variant.outputDocument);
-    if (draft) {
+    const baseIndex = variantBasePicker ? variantBasePicker.selectedIndex : -1;
+    const base = variantBasePicker ? variants[baseIndex] : null;
+    if (variantBasePicker && !base) {
+      await app.showAlert("請先按「上傳」加入樣板，再選一個母體樣板。");
+      return;
+    }
+    if (base) {
+      // 以選的母體樣板複製一份（位置、大小、版面尺寸、層級、文字都一樣），再從這裡開始改
+      const copy = deepClone(base);
+      copy.outputDocument = name;
+      variants.push(copy);
+      state.variantIndex = variants.length - 1;
+    } else if (draft) {
       draft.outputDocument = name;
       state.variantIndex = variants.indexOf(draft);
     } else {
@@ -6175,9 +6426,207 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         renderPreview();
       },
       deletedMessage: (variant) => `已刪除樣板「${variantLabel(variant)}」`,
+      // 照視窗裡的順序重排，目前選的樣板維持選取
+      reorder: (items) => {
+        const variants = currentTemplate().values.variants;
+        const selected = variants[state.variantIndex];
+        variants.splice(0, variants.length, ...items);
+        state.variantIndex = Math.max(variants.indexOf(selected), 0);
+      },
     },
     { el, beforeOpen: commitFields, persist },
   );
+
+  // ----- 上傳 PSD 新增 Resize 樣板：檔名（去掉 .psd）＝樣板名稱，位置、大小、畫布照那份 PSD -----
+
+  // 預覽和產出用的是母版的圖層，比例跟樣板 PSD 不一定一樣：上傳的樣板每個圖層都預設勾「填滿」，
+  // 剛好撐滿樣板 PSD 裡的框（文字仍等比，不會變形）
+  function autoStretchToTemplate(elements) {
+    Object.keys(elements).forEach((name) => {
+      const spec = elements[name];
+      if (name !== "$BG" && !spec.hidden && spec.heightPercent > 0) {
+        spec.stretch = true;
+      }
+    });
+  }
+
+  async function uploadVariants() {
+    const template = currentTemplate();
+    if (!template) {
+      await app.showAlert("請先選擇或新增模組。");
+      return;
+    }
+    let files;
+    try {
+      files = await localFileSystem.getFileForOpening({
+        allowMultiple: true,
+        types: ["psd", "psb"],
+      });
+    } catch (error) {
+      await app.showAlert(`無法選擇檔案：${error.message || error}`);
+      return;
+    }
+    files = (Array.isArray(files) ? files : [files]).filter(Boolean);
+    if (!files.length) {
+      return;
+    }
+    commitFields();
+    const variants = template.values.variants;
+    let master = template.source ? findOpenDocumentForTemplate(template) : null;
+    if (template.source && !isDocumentOpen(master)) {
+      await app.showAlert(
+        `請先在 Photoshop 開啟這個模組的母版 ${template.source.fileName || "PSD"}，再上傳樣板。`,
+      );
+      return;
+    }
+    if (master) {
+      state.master = master;
+      refreshExtraNames();
+    }
+    let newMaster = false;
+    let base = null;
+    const added = [];
+    const updated = [];
+    const failed = [];
+    const copied = {}; // 複製進母版的圖層 → 樣板 PSD 裡的位置
+    const warnings = [];
+    const uploadedVariants = new Set();
+    for (const file of files) {
+      const name = String(file.name).replace(/\.(psd|psb)$/i, "").trim();
+      try {
+        if (!master) {
+          // 空模組：第一個上傳的 PSD 當母版（預覽、產出都從它拿圖層）
+          try {
+            rememberSrcFolder(file.nativePath, await localFileSystem.createPersistentToken(file));
+          } catch (_error) {
+            // 記不住授權就等下次再開
+          }
+          const doc = await openPsdAsMaster(file);
+          const problem = mode.masterProblem(doc);
+          if (problem) {
+            throw new Error(problem);
+          }
+          template.source = { fileName: doc.name, path: readDocumentPath(doc) };
+          master = doc;
+          state.master = doc;
+          state.previewCache = null;
+          await mode.onMaster(doc);
+          refreshExtraNames();
+          newMaster = true;
+        }
+        // 樣板 PSD 裡沒有、但模組母版有的圖層：在新樣板隱藏（位置先照母版）
+        if (!base) {
+          base = originalLayoutFor(template, currentVariant());
+        }
+        const layout = await whilePhotoshopBusy(() =>
+          measurePsdLayout(file, master, [...layerNames(), ...Object.keys(copied)]),
+        );
+        if (newMaster && !variants.length) {
+          template.values.width = layout.width;
+          template.values.height = layout.height;
+        }
+        const elements = layout.elements;
+        autoStretchToTemplate(elements);
+        if (layout.renamed.length) {
+          warnings.push(`${name}：同名圖層自動編號 ${layout.renamed.join("、")}`);
+        }
+        layout.copied.forEach((layerName) => {
+          copied[layerName] = elements[layerName];
+        });
+        positionNames().forEach((layerName) => {
+          if (!elements[layerName] && layerName !== "$BG") {
+            elements[layerName] = {
+              ...(base.elements && base.elements[layerName]
+                ? deepClone(base.elements[layerName])
+                : { leftPercent: 0, topPercent: 0, widthPercent: 10 }),
+              hidden: true,
+            };
+          }
+        });
+        const existing = variants.find((variant) =>
+          isSameVariantName(variant.outputDocument || "", name),
+        );
+        if (existing) {
+          // 同名就更新版面，其他設定（獨立、文字…）保留
+          existing.width = layout.width;
+          existing.height = layout.height;
+          existing.elements = elements;
+          uploadedVariants.add(existing);
+          updated.push(name);
+        } else {
+          const variant = {
+            outputDocument: name,
+            width: layout.width,
+            height: layout.height,
+            elements,
+          };
+          variants.push(variant);
+          uploadedVariants.add(variant);
+          added.push(name);
+        }
+      } catch (error) {
+        failed.push(`${name}：${describeModalError(error)}`);
+      }
+    }
+    if (state.master) {
+      await activateDocument(state.master);
+    }
+    const copiedNames = Object.keys(copied);
+    if (copiedNames.length) {
+      // 新複製進母版的圖層：這次上傳以外的樣板一律隱藏（包含同一份 PSD 的其他模組）。
+      // 上傳期間面板可能已先替舊樣板補上「顯示」的設定，所以已經有設定的也要改成隱藏
+      const path = readDocumentPath(state.master);
+      templates()
+        .filter(
+          (item) =>
+            item === template ||
+            (item.source && path && item.source.path === path),
+        )
+        .forEach((item) => {
+          item.values.variants.forEach((variant) => {
+            const uploaded = uploadedVariants.has(variant);
+            copiedNames.forEach((layerName) => {
+              const spec = variant.elements[layerName];
+              if (!spec) {
+                variant.elements[layerName] = { ...deepClone(copied[layerName]), hidden: true };
+              } else if (!uploaded) {
+                spec.hidden = true;
+              }
+            });
+          });
+        });
+      refreshExtraNames();
+    }
+    const last = added[added.length - 1] || updated[updated.length - 1];
+    if (last) {
+      state.variantIndex = variants.findIndex((variant) =>
+        isSameVariantName(variant.outputDocument || "", last),
+      );
+      ensureVariantElements(template);
+      renderVariantPicker();
+      resizeStage();
+      loadFields();
+      renderPreview();
+      const parts = [
+        added.length ? `新增 ${added.join("、")}` : "",
+        updated.length ? `更新 ${updated.join("、")}` : "",
+      ].filter(Boolean);
+      if (copiedNames.length) {
+        parts.push(`母版新增圖層 ${copiedNames.join("、")}`);
+      }
+      if (copiedNames.length || newMaster) {
+        await refreshPreview(copiedNames.length > 0); // 重新擷取母版，新圖層才有預覽圖
+      }
+      await persist(`已${parts.join("，")}`, "已上傳樣板");
+    }
+    if (failed.length) {
+      await app.showAlert(`以下 PSD 無法讀取：\n${failed.join("\n")}`);
+    }
+    if (warnings.length) {
+      await app.showAlert(warnings.join("\n"));
+    }
+  }
+
 
   const templateManager = createListManager(
     {
@@ -6275,7 +6724,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   });
   variantNameInput.addEventListener("input", updateVariantNameValidity);
 
-  el("btn-upload-psd").addEventListener("click", uploadPsd);
+  if (el("btn-upload-psd")) {
+    el("btn-upload-psd").addEventListener("click", uploadPsd);
+  }
   el("btn-add-template").addEventListener("click", addTemplate);
   el("btn-add-variant").addEventListener("click", addVariant);
   el("btn-duplicate-layer").addEventListener("click", duplicateLayer);
@@ -6420,6 +6871,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     );
   });
 
+  if (el("btn-upload-variants")) {
+    el("btn-upload-variants").addEventListener("click", uploadVariants);
+  }
   el("btn-manage-variants").addEventListener("click", () => {
     if (!currentTemplate()) {
       setStatus("請先選擇或新增模組。");
@@ -8051,9 +8505,60 @@ async function buildRotatedPreviewNow(
 
 let stretchPartsSeq = 0;
 
+function unionBounds(list) {
+  return list.reduce((a, b) => ({
+    left: Math.min(a.left, b.left),
+    top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right),
+    bottom: Math.max(a.bottom, b.bottom),
+  }));
+}
+
+// 智慧型物件轉成一般圖層（需在 modal 內、圖層所在文件為作用中）；
+// 裡面有多個圖層會變成群組，名稱改回原本的。失敗回傳 null
+async function convertSmartObjectToLayers(layer) {
+  const name = layer.name;
+  await selectOnlyLayer(layer);
+  try {
+    await action.batchPlay(
+      [
+        {
+          _obj: "placedLayerConvertToLayers",
+          _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+        },
+      ],
+      { synchronousExecution: true },
+    );
+  } catch (_error) {
+    return null;
+  }
+  const active = app.activeDocument && app.activeDocument.activeLayers;
+  const converted = active && active.length ? active[0] : null;
+  if (converted) {
+    try {
+      converted.name = name;
+    } catch (_error) {
+      // 改不了名稱不影響排版
+    }
+  }
+  return converted;
+}
+const STRETCH_MAX_TRIES = 3;
+
+// 存檔（例如改完文字）之後手上的文件物件可能過期，依 id 重新從 app.documents 拿一份
+function freshDocument(doc) {
+  for (let i = 0; i < app.documents.length; i++) {
+    if (app.documents[i].id === doc.id) {
+      return app.documents[i];
+    }
+  }
+  return doc;
+}
+
 // 拉伸的群組：分開匯出「只有色塊」和「只有文字」兩張預覽圖（文字要等比縮放，不能跟著拉伸）；
 // 不是含文字的群組回傳 null
-async function buildStretchParts(master, layerName, required, names) {
+async function buildStretchParts(staleMaster, layerName, required, names) {
+  const master = freshDocument(staleMaster);
   const tempFolder = await localFileSystem.getTemporaryFolder();
   stretchPartsSeq += 1;
   const stamp = `${master.id}-${Date.now()}-${stretchPartsSeq}`;
@@ -8067,19 +8572,32 @@ async function buildStretchParts(master, layerName, required, names) {
     if (!layer) {
       throw new Error(`找不到圖層 ${layerName}`);
     }
-    const texts = canSearchChildren(layer) ? collectTextLayers(layer) : [];
-    if (!texts.length) {
+    // 智慧型物件看不到裡面的文字：在暫存文件裡轉成圖層後再量、再分開
+    const smart = isSmartObject(layer);
+    const texts = smart ? [] : canSearchChildren(layer) ? collectTextLayers(layer) : [];
+    if (!smart && !texts.length) {
       return;
     }
-    const group = boundsBox(layer);
-    const box = texts.map(readLayerBounds).reduce((a, b) => ({
-      left: Math.min(a.left, b.left),
-      top: Math.min(a.top, b.top),
-      right: Math.max(a.right, b.right),
-      bottom: Math.max(a.bottom, b.bottom),
-    }));
+    let group = smart ? null : boundsBox(layer);
+    let box = smart ? null : unionBounds(texts.map(readLayerBounds));
+    let noText = false;
     // 在暫存文件的複本裡刪掉不要的圖層
     const removeFrom = (keepText) => async (temp, copy) => {
+      if (isSmartObject(copy)) {
+        copy = await convertSmartObjectToLayers(copy);
+        if (!copy) {
+          throw new Error(`${layerName} 無法轉換成圖層`);
+        }
+        if (!group) {
+          const inner = canSearchChildren(copy) ? collectTextLayers(copy) : [];
+          if (!inner.length) {
+            noText = true; // 裡面沒有文字（例如純圖片）：整張拉伸就好
+            return { replacedLayer: copy };
+          }
+          group = boundsBox(copy);
+          box = unionBounds(inner.map(readLayerBounds));
+        }
+      }
       const ids = [];
       (function walk(node) {
         for (const child of listLayers(node)) {
@@ -8101,9 +8619,13 @@ async function buildStretchParts(master, layerName, required, names) {
         );
       }
       app.activeDocument = temp;
+      return { replacedLayer: copy };
     };
     try {
       const bg = await exportLayerPreviewPng(master, layer, bgFile, layerName, removeFrom(false));
+      if (noText) {
+        return;
+      }
       const text = await exportLayerPreviewPng(master, layer, textFile, layerName, removeFrom(true));
       result = {
         bg,
@@ -8923,24 +9445,6 @@ function hsbToRgb(h, s, v) {
     [v, p, q],
   ][i % 6];
   return [r * 255, g * 255, b * 255];
-}
-
-// 刪除「新增文字」加的文字區塊並存檔
-async function deleteLayerFromMaster(master, layerName, required, names) {
-  await runModal(async () => {
-    app.activeDocument = master;
-    const container = getMcdSourceContainer(master, required, names);
-    const layer = findNamedLayer(container, layerName);
-    if (!layer) {
-      throw new Error(`找不到圖層 ${layerName}`);
-    }
-    await selectOnlyLayer(layer);
-    await action.batchPlay(
-      [{ _obj: "delete", _target: [{ _ref: "layer", _id: layer.id }] }],
-      { synchronousExecution: true },
-    );
-    await master.save();
-  }, "刪除文字區塊");
 }
 
 // 複製圖層（放在原圖層正上方）並存檔；新名稱＝去掉結尾數字＋下一個沒用過的號碼（$SUBTEXT1 → $SUBTEXT2）

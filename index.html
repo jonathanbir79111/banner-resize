@@ -599,6 +599,11 @@
         white-space: nowrap;
       }
 
+      .manager-row .move-btn {
+        min-width: 24px;
+        padding: 0 4px;
+      }
+
       .manager-row .small-btn,
       .manager-row input[type="checkbox"] {
         flex: 0 0 auto;
@@ -873,9 +878,6 @@
             <sp-picker data-role="template-picker" size="m" label="PSD 模組">
               <sp-menu slot="options"></sp-menu>
             </sp-picker>
-            <button type="button" class="small-btn" data-role="btn-upload-psd">
-              上傳.psd
-            </button>
             <input
               type="text"
               class="text-input"
@@ -905,6 +907,10 @@
               data-role="variant-name"
               placeholder="版型名稱（例：上圖下字）"
             />
+            <!-- 新樣板以這裡選的 Resize 樣板為母體複製 -->
+            <sp-picker data-role="variant-base-picker" size="m" label="母體樣板">
+              <sp-menu slot="options"></sp-menu>
+            </sp-picker>
             <button type="button" class="small-btn" data-role="btn-add-variant">
               新增
             </button>
@@ -914,13 +920,23 @@
             <div class="picker-col">
               <div class="picker-title-row">
                 <span class="picker-title">選擇Resize樣板</span>
-                <button
-                  type="button"
-                  class="small-btn"
-                  data-role="btn-manage-variants"
-                >
-                  編輯
-                </button>
+                <div class="title-buttons">
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-upload-variants"
+                    title="上傳 PSD（可多選），依檔名新增 Resize 樣板，位置大小照 PSD"
+                  >
+                    上傳
+                  </button>
+                  <button
+                    type="button"
+                    class="small-btn"
+                    data-role="btn-manage-variants"
+                  >
+                    編輯
+                  </button>
+                </div>
               </div>
               <sp-picker data-role="variant-picker" size="m">
                 <sp-menu slot="options"></sp-menu>
