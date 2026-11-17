@@ -2630,11 +2630,14 @@ async function buildResizeVariantDocument(
   return newDoc;
 }
 
-async function generateResizeDocuments(master, values) {
+// only：只產出這一個樣板；沒給就產出全部
+async function generateResizeDocuments(master, values, only) {
   if (!isDocumentOpen(master)) {
     throw new Error("母版已關閉，請重新開啟或上傳母版。");
   }
-  const variants = values.variants.filter((variant) => variant.outputDocument);
+  const variants = (only ? [only] : values.variants).filter(
+    (variant) => variant.outputDocument,
+  );
   if (!variants.length) {
     throw new Error("此模組還沒有已命名的版型，請先輸入版型名稱並按「新增」。");
   }
@@ -2643,7 +2646,7 @@ async function generateResizeDocuments(master, values) {
 
   const folder = await localFileSystem.getFolder();
   if (!folder) {
-    return;
+    return false; // 取消選資料夾
   }
 
   const jobs = [];
@@ -2687,6 +2690,7 @@ async function generateResizeDocuments(master, values) {
   if (errors.length) {
     throw new Error(errors.join("\n"));
   }
+  return true;
 }
 
 // ---------- 預覽：把母版六個圖層各自匯出成 PNG，在面板內用 CSS 定位模擬排版 ----------
@@ -4034,7 +4038,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         ? [variantLabel(variants[0]), ...state.sets.map((set) => set.name)]
         : []
       : variants.map(variantLabel);
-    fillPicker(variantPicker, labels);
+    // UXP 的下拉一旦是空的，之後加進去的選項常常不會出現：沒有樣板時放一個提示項目
+    fillPicker(
+      variantPicker,
+      labels.length ? labels : [isApply ? "（尚無樣板）" : "（請按「上傳」加入樣板）"],
+    );
     if (labels.length) {
       setPickerIndex(
         variantPicker,
@@ -4445,8 +4453,10 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     resizeStage();
     renderGrid(); // 格線圖依預覽區實際大小重畫
     el("size-label-check").checked = readSizeLabelsVisible();
+    // 文字疊圖、旋轉圖和尺寸標籤是用預覽區的 px 算的：預覽區大小變了（例如換模組、版面尺寸不同）要整個重排，
+    // 不然會沿用舊預覽區的長寬比，看起來像被壓扁
     Object.keys(state.images).forEach((name) => {
-      updateSizeLabels(name, specForPreview(name)); // 尺寸標籤用 px 定位，預覽區大小變了要重排
+      applyElementStyle(name, specForPreview(name));
     });
     updateHighlight();
     if (state.textEditor && state.textEditor.box) {
@@ -6163,22 +6173,40 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         suggestTemplate(doc);
       }
       templateNameInput.classList.remove("is-invalid");
+      showNameError(templateNameInput, "template-name-error", "");
       await refreshPreview(false);
     } catch (error) {
       await app.showAlert(error.message || String(error));
     }
   }
 
+  // 名稱輸入框下方的紅字提醒；text 空字串＝清掉
+  function showNameError(input, role, text) {
+    input.classList.toggle("is-invalid", Boolean(text));
+    if (el(role)) {
+      el(role).textContent = text;
+    }
+  }
+
+  function isTemplateNameTaken(name) {
+    return templates().some((template) => template.name === name);
+  }
+
+  function isVariantNameTaken(name) {
+    const template = currentTemplate();
+    return Boolean(template) && template.values.variants.some((variant) =>
+      isSameVariantName(variant.outputDocument || "", name),
+    );
+  }
+
   async function addTemplate() {
     const name = templateNameInput.value.trim();
     if (!name) {
-      templateNameInput.classList.add("is-invalid");
-      setStatus("請輸入模組名稱。");
+      showNameError(templateNameInput, "template-name-error", "請輸入模組名稱");
       return;
     }
-    if (templates().some((template) => template.name === name)) {
-      templateNameInput.classList.add("is-invalid");
-      setStatus(`模組「${name}」已存在。`);
+    if (isTemplateNameTaken(name)) {
+      showNameError(templateNameInput, "template-name-error", "此命名已被使用");
       return;
     }
     if (!isApply) {
@@ -6199,6 +6227,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       state.previewCache = null;
       templateNameInput.value = "";
       templateNameInput.classList.remove("is-invalid", "is-suggested");
+      showNameError(templateNameInput, "template-name-error", "");
       renderAll();
       await persist(`已新增模組「${name}」，請按「上傳」加入樣板`, "成功新增模組");
       return;
@@ -6235,6 +6264,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.variantIndex = variantIndex;
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
+    showNameError(templateNameInput, "template-name-error", "");
 
     renderAll();
     await persist(`已新增模組「${name}」`, "成功新增模組");
@@ -6255,13 +6285,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
     const variants = template.values.variants;
-    if (
-      variants.some((variant) =>
-        isSameVariantName(variant.outputDocument || "", name),
-      )
-    ) {
-      variantNameInput.classList.add("is-invalid");
-      setStatus(`版型「${name}」已存在。`);
+    if (isVariantNameTaken(name)) {
+      showNameError(variantNameInput, "variant-name-error", "此命名已被使用");
       return;
     }
 
@@ -6290,6 +6315,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     ensureVariantElements(template);
     variantNameInput.value = "";
+    showNameError(variantNameInput, "variant-name-error", "");
 
     renderVariantPicker();
     loadFields();
@@ -6657,6 +6683,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       },
       afterChange: renderAll,
       deletedMessage: (template) => `已刪除模組「${template.name}」`,
+      // 照視窗裡的順序重排「選擇模組」，目前選的模組維持選取
+      reorder: (items) => {
+        const list = templates();
+        const selected = list[state.templateIndex];
+        list.splice(0, list.length, ...items);
+        if (selected) {
+          state.templateIndex = list.indexOf(selected);
+        }
+      },
     },
     { el, beforeOpen: commitFields, persist },
   );
@@ -6706,6 +6741,9 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       loadFields();
       return;
     }
+    if (!currentTemplate() || !currentTemplate().values.variants.length) {
+      return; // 選到的是「請按上傳」提示
+    }
     state.variantIndex = readPickerIndex(event);
     updateVariantNameValidity();
     loadFields();
@@ -6719,10 +6757,25 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     updateHighlight();
   });
 
+  // 一邊打字一邊檢查有沒有重名
   templateNameInput.addEventListener("input", () => {
-    templateNameInput.classList.remove("is-invalid", "is-suggested");
+    templateNameInput.classList.remove("is-suggested");
+    const name = templateNameInput.value.trim();
+    showNameError(
+      templateNameInput,
+      "template-name-error",
+      name && isTemplateNameTaken(name) ? "此命名已被使用" : "",
+    );
   });
-  variantNameInput.addEventListener("input", updateVariantNameValidity);
+  variantNameInput.addEventListener("input", () => {
+    updateVariantNameValidity();
+    const name = variantNameInput.value.trim();
+    if (name && isVariantNameTaken(name)) {
+      showNameError(variantNameInput, "variant-name-error", "此命名已被使用");
+    } else if (el("variant-name-error")) {
+      el("variant-name-error").textContent = "";
+    }
+  });
 
   if (el("btn-upload-psd")) {
     el("btn-upload-psd").addEventListener("click", uploadPsd);
@@ -6926,11 +6979,21 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await applyExtras.generate(template);
       return;
     }
+    // 沒勾「產出全部」就只產出目前選的樣板
+    const all = el("generate-all-check") && el("generate-all-check").checked;
+    const only = all ? null : currentVariant();
+    if (!all && !only) {
+      await app.showAlert("請先選擇要產出的 Resize 樣板，或勾選「產出全部」。");
+      return;
+    }
     try {
-      await whilePhotoshopBusy(() =>
-        generateResizeDocuments(state.master, template.values),
+      const done = await whilePhotoshopBusy(() =>
+        generateResizeDocuments(state.master, template.values, only),
       );
-      closeResizeSettingsPanel();
+      // 產出後留在原本的面板，方便接著調整、再產出
+      if (done) {
+        await showToast("產出完成");
+      }
     } catch (error) {
       await app.showAlert(`Resize 產製失敗：${error.message || error}`);
     }
@@ -7014,6 +7077,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     state.elementName = editableNames()[0];
     templateNameInput.value = "";
     templateNameInput.classList.remove("is-invalid", "is-suggested");
+    showNameError(templateNameInput, "template-name-error", "");
     variantNameInput.value = "";
     renderAll();
     setStatus(note || "");

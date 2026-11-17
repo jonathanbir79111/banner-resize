@@ -237,6 +237,10 @@
         align-items: center;
       }
 
+      .generate-all-label {
+        margin-bottom: 6px;
+      }
+
       .independent-label {
         display: flex;
         flex-direction: row;
@@ -666,6 +670,17 @@
         word-break: break-all;
       }
 
+      /* 名稱重複／空白時，輸入框下方的紅字提醒（沒有內容時不佔位置） */
+      .name-error {
+        margin: -4px 0 8px;
+        font-size: 12px;
+        color: #ff6b6b;
+      }
+
+      .name-error:empty {
+        display: none;
+      }
+
       .template-hint {
         margin: -2px 0 8px;
         font-size: 12px;
@@ -899,6 +914,7 @@
           >
             此 PSD 尚未建立模組，請點選「新增」
           </p>
+          <p class="name-error" data-role="template-name-error"></p>
 
           <div class="module-row">
             <input
@@ -915,6 +931,7 @@
               新增
             </button>
           </div>
+          <p class="name-error" data-role="variant-name-error"></p>
 
           <div class="settings-row">
             <div class="picker-col">
@@ -1505,6 +1522,11 @@
           </div>
 
           <div class="divider"></div>
+          <!-- 不勾：只產出目前選的 Resize 樣板；勾了才產出這個模組的全部樣板 -->
+          <label class="independent-label generate-all-label">
+            <input type="checkbox" data-role="generate-all-check" />
+            產出全部
+          </label>
           <div class="settings-row">
             <sp-button data-role="btn-start-generate" variant="cta"
               >產出Resize圖</sp-button
@@ -1555,6 +1577,7 @@
           >
             此 PSD 尚未建立模組，請點選「新增」
           </p>
+          <p class="name-error" data-role="template-name-error"></p>
 
           <div class="module-row" style="display: none">
             <input
@@ -1567,6 +1590,7 @@
               新增
             </button>
           </div>
+          <p class="name-error" data-role="variant-name-error"></p>
           <div class="settings-fields" style="margin-top: 10px">
             <div class="settings-field-row">
               <label>圖檔src</label>
