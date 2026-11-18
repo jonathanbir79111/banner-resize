@@ -846,6 +846,83 @@
         width: 100%;
       }
 
+      .real-material-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 6px;
+      }
+
+      .real-material-label {
+        font-size: 12px;
+        color: #7ee08a;
+      }
+
+      .real-material-label:empty {
+        display: none;
+      }
+
+      /* 產出：勾選要產出的模組 */
+      .export-modules {
+        width: 100%;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #ccc;
+      }
+
+      .export-modules-head {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 4px;
+      }
+
+      .export-modules-list {
+        max-height: 160px;
+        overflow-y: auto;
+        padding: 4px 6px;
+        border: 1px solid #555;
+        border-radius: 3px;
+      }
+
+      .export-modules-list label,
+      .export-modules-head label {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+        margin: 2px 0;
+        white-space: nowrap;
+      }
+
+      .export-progress {
+        margin-top: 6px;
+        color: #fff;
+      }
+
+      .export-progress-track {
+        width: 100%;
+        height: 4px;
+        margin-top: 4px;
+        background: #444;
+        border-radius: 2px;
+      }
+
+      .export-progress-bar {
+        width: 0;
+        height: 4px;
+        background: #0d66d0;
+        border-radius: 2px;
+      }
+
+      /* 裁切填滿：框外的部分藏起來 */
+      .preview-clip {
+        position: absolute;
+        overflow: hidden;
+      }
+
       .settings-actions sp-button {
         width: auto;
         min-width: 120px;
@@ -866,9 +943,26 @@
       <div id="resize-settings-panel" style="display: none; width: 100%">
         <div class="preview-bar module-folder-bar" style="margin: 0 0 6px">
           <span id="module-folder-label" class="hint"></span>
+          <!-- 真圖 PSD（圖層名稱跟樣板一樣）：Resize 的預覽和產出都改用它 -->
+          <button type="button" id="btn-upload-real-material">
+            上傳真實素材
+          </button>
           <button type="button" id="btn-edit-module-json">編輯</button>
           <button type="button" id="btn-change-module-folder">
             變更資料夾
+          </button>
+        </div>
+
+        <div class="real-material-row">
+          <span id="real-material-label" class="real-material-label"></span>
+          <button
+            type="button"
+            id="btn-clear-real-material"
+            class="small-btn"
+            style="display: none"
+            title="不用真實素材，預覽和產出改回模組的母版"
+          >
+            取消真實素材
           </button>
         </div>
 
@@ -1457,10 +1551,14 @@
             </div>
             <div class="settings-field-row">
               <label>填滿</label>
-              <label class="stretch-label">
-                <input type="checkbox" data-role="field-stretch" />
-                拉伸填滿框（不維持比例，適合色塊／背景）
-              </label>
+              <!-- 圖層放進框的方式；沒選過時依名稱：$KV 裁切填滿、$Logo 等比放入 -->
+              <sp-picker data-role="field-fit" size="m" label="填滿方式">
+                <sp-menu slot="options">
+                  <sp-menu-item value="contain">等比放入（整個看得到，可能留白）</sp-menu-item>
+                  <sp-menu-item value="cover">裁切填滿（蓋滿框，多的裁掉，適合照片）</sp-menu-item>
+                  <sp-menu-item value="stretch">拉伸（底色拉伸、文字等比，適合按鈕／色塊）</sp-menu-item>
+                </sp-menu>
+              </sp-picker>
             </div>
             <div class="settings-field-row">
               <label>角度</label>
@@ -1522,11 +1620,32 @@
           </div>
 
           <div class="divider"></div>
-          <!-- 不勾：只產出目前選的 Resize 樣板；勾了才產出這個模組的全部樣板 -->
-          <label class="independent-label generate-all-label">
-            <input type="checkbox" data-role="generate-all-check" />
-            產出全部
-          </label>
+          <!-- 勾選要產出的模組（勾一個＝產出它全部的樣板）；都沒勾就只產出目前選的 Resize 樣板 -->
+          <div class="export-modules">
+            <div class="export-modules-head">
+              <label>
+                <input type="checkbox" data-role="export-all-check" />
+                全選
+              </label>
+              <span data-role="export-count"></span>
+              <label title="PSD 之外另存 JPG">
+                <input type="checkbox" data-role="export-jpg-check" />
+                JPG
+              </label>
+              <label title="PSD 之外另存 PNG">
+                <input type="checkbox" data-role="export-png-check" />
+                PNG
+              </label>
+            </div>
+            <div class="export-modules-list" data-role="export-modules-list"></div>
+            <!-- 進度直接顯示在面板上（強制回應視窗開著時 Photoshop 不能建立／存檔文件，會卡住） -->
+            <div class="export-progress" data-role="export-progress" style="display: none">
+              <span data-role="export-progress-text"></span>
+              <div class="export-progress-track">
+                <div class="export-progress-bar" data-role="export-progress-bar"></div>
+              </div>
+            </div>
+          </div>
           <div class="settings-row">
             <sp-button data-role="btn-start-generate" variant="cta"
               >產出Resize圖</sp-button
@@ -2184,10 +2303,14 @@
             </div>
             <div class="settings-field-row">
               <label>填滿</label>
-              <label class="stretch-label">
-                <input type="checkbox" data-role="field-stretch" />
-                拉伸填滿框（不維持比例，適合色塊／背景）
-              </label>
+              <!-- 圖層放進框的方式；沒選過時依名稱：$KV 裁切填滿、$Logo 等比放入 -->
+              <sp-picker data-role="field-fit" size="m" label="填滿方式">
+                <sp-menu slot="options">
+                  <sp-menu-item value="contain">等比放入（整個看得到，可能留白）</sp-menu-item>
+                  <sp-menu-item value="cover">裁切填滿（蓋滿框，多的裁掉，適合照片）</sp-menu-item>
+                  <sp-menu-item value="stretch">拉伸（底色拉伸、文字等比，適合按鈕／色塊）</sp-menu-item>
+                </sp-menu>
+              </sp-picker>
             </div>
             <div class="settings-field-row">
               <label>角度</label>

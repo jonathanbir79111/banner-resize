@@ -1337,9 +1337,10 @@ function normalizeFrameOptions(src, out) {
   if (src.hidden === true) {
     out.hidden = true;
   }
-  // 拉伸填滿框：不維持比例，剛好等於框的寬高（要有高度%）
-  if (src.stretch === true && out.heightPercent > 0) {
-    out.stretch = true;
+  // 舊的「拉伸填滿框」勾選（stretch: true）不再讀入：預設一律等比放入，要拉伸請在面板選
+  // 放進框的方式（等比放入／裁切填滿／拉伸）；沒設定時依圖層名稱決定，見 fitModeOf
+  if (FIT_MODES.includes(src.fit) && out.heightPercent > 0) {
+    out.fit = src.fit;
   }
   const rotation = normalizeAngle(src.rotation);
   if (Number.isFinite(rotation) && rotation) {
@@ -1408,7 +1409,7 @@ function hasFrameHeight(spec) {
 }
 
 // 圖層在框內的位置自動決定（只有設定了高度% 且圖層被縮小時才看得出來）：
-// 框中心偏左靠左、偏右靠右、其餘置中；產品與背景垂直置中，其他靠上
+// 框中心偏左靠左、偏右靠右、其餘置中；垂直一律置中（換成比例不同的真實素材時上下留白平均）
 function resolveAlign(name, spec) {
   if (spec.centered) {
     return { alignX: "center", alignY: "middle" };
@@ -1416,7 +1417,7 @@ function resolveAlign(name, spec) {
   const center = spec.leftPercent + spec.widthPercent / 2;
   return {
     alignX: center < 40 ? "left" : center > 60 ? "right" : "center",
-    alignY: name === "$PROD" || name === "$BG" ? "middle" : "top",
+    alignY: "middle",
   };
 }
 
@@ -1427,17 +1428,54 @@ function resolveAlign(name, spec) {
  *   縮放     = 有框高且自然高度超過框高 ? 框高 ÷ 自然高度 : 1
  *   位置     = 框起點 + (框尺寸 − 圖層尺寸) × 對齊比例（0 / 0.5 / 1）
  */
+// 圖層放進框的方式：
+//   contain 等比放入（整個圖層看得到，可能留白）
+//   cover   裁切填滿（等比放大蓋滿框，框外裁掉；適合照片）
+//   stretch 拉伸（底色照框拉伸，文字等比；適合色塊／按鈕）
+const FIT_MODES = ["contain", "cover", "stretch"];
+
+// 有在面板選過（spec.fit）就照選的；沒選過一律等比放入——圖和字都不能變形是第一原則。
+// 舊資料的「拉伸填滿框」勾選（spec.stretch）不再當成拉伸。要有框高才能裁切或拉伸
+function fitModeOf(name, spec) {
+  if (name === "$BG" || !hasFrameHeight(spec)) {
+    return "contain";
+  }
+  return FIT_MODES.includes(spec.fit) ? spec.fit : "contain";
+}
+
 function isStretched(name, spec) {
-  return name !== "$BG" && spec.stretch === true && hasFrameHeight(spec);
+  return fitModeOf(name, spec) === "stretch";
+}
+
+function isCovered(name, spec) {
+  return fitModeOf(name, spec) === "cover";
+}
+
+// 框本身（%）
+function frameRectOf(spec) {
+  return {
+    left: spec.leftPercent,
+    top: spec.topPercent,
+    width: spec.widthPercent,
+    height: spec.heightPercent,
+  };
 }
 
 function fitInFrame(name, spec, aspectPercent) {
   if (isStretched(name, spec)) {
+    return frameRectOf(spec);
+  }
+  if (isCovered(name, spec) && aspectPercent > 0) {
+    // 等比放大到寬、高都蓋滿框，置中；超出框的部分預覽和產出都會裁掉
+    const naturalHeight = spec.widthPercent * aspectPercent;
+    const scale = Math.max(1, spec.heightPercent / naturalHeight);
+    const width = spec.widthPercent * scale;
+    const height = naturalHeight * scale;
     return {
-      left: spec.leftPercent,
-      top: spec.topPercent,
-      width: spec.widthPercent,
-      height: spec.heightPercent,
+      left: spec.leftPercent + (spec.widthPercent - width) / 2,
+      top: spec.topPercent + (spec.heightPercent - height) / 2,
+      width,
+      height,
     };
   }
   const isBackground = name === "$BG";
@@ -2040,6 +2078,10 @@ async function layoutInFrame(layer, frame, spec, name) {
       layer = converted;
     }
   }
+  if (isStretched(name, spec) && isTextLayer(layer)) {
+    // 只有文字、沒有底色可以拉：改成等比放入（置中），字才不會變形
+    spec = { ...spec, fit: "contain" };
+  }
   const canvasW = frame.right - frame.left;
   const canvasH = frame.bottom - frame.top;
   const src = boundsBox(layer);
@@ -2069,10 +2111,52 @@ async function layoutInFrame(layer, frame, spec, name) {
     frame.left + (canvasW * rect.left) / 100 - fitted.left,
     frame.top + (canvasH * rect.top) / 100 - fitted.top,
   );
+  if (isCovered(name, spec)) {
+    // 裁切填滿：框外的部分用圖層遮色片藏起來（不刪像素，之後還能在 PSD 裡調整）
+    await addRectMask(layer, {
+      left: frame.left + (canvasW * spec.leftPercent) / 100,
+      top: frame.top + (canvasH * spec.topPercent) / 100,
+      right: frame.left + (canvasW * (spec.leftPercent + spec.widthPercent)) / 100,
+      bottom: frame.top + (canvasH * (spec.topPercent + spec.heightPercent)) / 100,
+    });
+  }
   // 最後以圖層中心旋轉（跟預覽一樣）
   if (spec.rotation) {
     await rotateLayer(layer, spec.rotation);
   }
+}
+
+// 依矩形範圍（px）替圖層加上顯示範圍的遮色片（需在 modal 內）
+async function addRectMask(layer, rect) {
+  const px = (value) => ({ _unit: "pixelsUnit", _value: Math.round(value) });
+  await selectOnlyLayer(layer);
+  await action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "channel", _property: "selection" }],
+        to: {
+          _obj: "rectangle",
+          top: px(rect.top),
+          left: px(rect.left),
+          bottom: px(rect.bottom),
+          right: px(rect.right),
+        },
+      },
+      {
+        _obj: "make",
+        new: { _class: "channel" },
+        at: { _ref: "channel", _enum: "channel", _value: "mask" },
+        using: { _enum: "userMaskEnabled", _value: "revealSelection" },
+      },
+      {
+        _obj: "set",
+        _target: [{ _ref: "channel", _property: "selection" }],
+        to: { _enum: "ordinal", _value: "none" },
+      },
+    ],
+    { synchronousExecution: true },
+  );
 }
 
 async function rotateLayer(layer, degrees) {
@@ -2612,6 +2696,7 @@ async function buildResizeVariantDocument(
     canvasH,
     variant.order,
   );
+  await addAliasLayers(newDoc, variant);
   if (isIndependentVariant(variant) && variant.textOverrides) {
     // 獨立樣板自己的文字只改在這份文件
     for (const layerName of Object.keys(variant.textOverrides)) {
@@ -2630,8 +2715,49 @@ async function buildResizeVariantDocument(
   return newDoc;
 }
 
-// only：只產出這一個樣板；沒給就產出全部
-async function generateResizeDocuments(master, values, only) {
+// 樣板要顯示、但來源 PSD 沒有的編號圖層（例如真實素材只有 $KV，樣板要 $KV2）：
+// 複製去掉編號的那個圖層來用（需在 modal 內）
+async function addAliasLayers(doc, variant) {
+  for (const name of Object.keys(variant.elements)) {
+    const spec = variant.elements[name];
+    if (!spec || spec.hidden || findLayerByName(doc, name)) {
+      continue;
+    }
+    const base = name.replace(/\d+$/, "");
+    const layer = base !== name ? findLayerByName(doc, base) : null;
+    if (!layer || typeof layer.duplicate !== "function") {
+      continue;
+    }
+    const copy = await layer.duplicate();
+    if (copy) {
+      copy.name = name;
+    }
+  }
+}
+
+// 另存 JPG／PNG（PSD 存好之後）
+async function saveDocumentAsImages(doc, folder, docName, formats) {
+  if (formats.jpg && doc.saveAs && typeof doc.saveAs.jpg === "function") {
+    const file = await folder.createFile(`${docName}.jpg`, { overwrite: true });
+    await doc.saveAs.jpg(file, { quality: 12 }, true);
+  }
+  if (formats.png && doc.saveAs && typeof doc.saveAs.png === "function") {
+    const file = await folder.createFile(`${docName}.png`, { overwrite: true });
+    await doc.saveAs.png(file, { compression: 6 }, true);
+  }
+}
+
+/**
+ * 產出 Resize 圖。
+ *   master  圖層來源（模組的母版，或上傳的真實素材）
+ *   only    只產出這一個樣板；沒給就產出 values 裡全部的樣板
+ *   options.folder    存到這個資料夾（沒給就請使用者選）
+ *   options.formats   { jpg, png } 另存的格式（PSD 一定會存）
+ *   options.close     存完就關閉產出的文件（一次產很多個時用）
+ *   options.progress(name) 每開始一個樣板呼叫一次；回傳 false 表示使用者取消
+ * 回傳 { done, errors }；取消選資料夾回傳 null
+ */
+async function generateResizeDocuments(master, values, only, options = {}) {
   if (!isDocumentOpen(master)) {
     throw new Error("母版已關閉，請重新開啟或上傳母版。");
   }
@@ -2644,27 +2770,26 @@ async function generateResizeDocuments(master, values, only) {
 
   const sourceLayers = resizeSourceLayers(master);
 
-  const folder = await localFileSystem.getFolder();
+  const folder = options.folder || (await localFileSystem.getFolder());
   if (!folder) {
-    return false; // 取消選資料夾
-  }
-
-  const jobs = [];
-  for (const variant of variants) {
-    const fileName = toPsdFileName(variant.outputDocument);
-    const file = await folder.createFile(fileName, { overwrite: true });
-    jobs.push({ variant, fileName, file });
+    return null; // 取消選資料夾
   }
 
   const errors = [];
+  let done = 0;
 
-  for (const job of jobs) {
-    const docName = stripExtension(job.fileName);
+  for (const variant of variants) {
+    const fileName = toPsdFileName(variant.outputDocument);
+    const docName = stripExtension(fileName);
+    if (options.progress && options.progress(docName) === false) {
+      break;
+    }
     const { width: canvasW, height: canvasH } = variantCanvasSize(
       values,
-      job.variant,
+      variant,
     );
     try {
+      const file = await folder.createFile(fileName, { overwrite: true });
       await runModal(async () => {
         const newDoc = await buildResizeVariantDocument(
           master,
@@ -2672,12 +2797,20 @@ async function generateResizeDocuments(master, values, only) {
           docName,
           canvasW,
           canvasH,
-          job.variant,
+          variant,
         );
-        await saveDocumentAsPsd(newDoc, job.file);
+        try {
+          await saveDocumentAsPsd(newDoc, file);
+          await saveDocumentAsImages(newDoc, folder, docName, options.formats || {});
+        } finally {
+          if (options.close) {
+            await closeDocumentQuietly(newDoc);
+          }
+        }
       }, `產製 ${docName}`);
+      done += 1;
     } catch (error) {
-      errors.push(`${job.fileName}：${error.message || error}`);
+      errors.push(`${fileName}：${error.message || error}`);
     }
   }
 
@@ -2687,10 +2820,7 @@ async function generateResizeDocuments(master, values, only) {
     // 母版可能已被關閉
   }
 
-  if (errors.length) {
-    throw new Error(errors.join("\n"));
-  }
-  return true;
+  return { done, errors };
 }
 
 // ---------- 預覽：把母版六個圖層各自匯出成 PNG，在面板內用 CSS 定位模擬排版 ----------
@@ -3057,7 +3187,7 @@ const LOADING_DELAY_MS = 250;
 const SPINNER_FRAMES = ["◐", "◓", "◑", "◒"];
 
 // 讀取中視窗（轉圈＋百分比）：很快就做完的不顯示，免得閃一下
-function startLoading(message) {
+function startLoading(message, title = "讀取中") {
   const dialog = document.getElementById("loading-dialog");
   const state = { shown: false, closed: false, frame: 0, percent: 0, message };
   const render = () => {
@@ -3075,7 +3205,7 @@ function startLoading(message) {
     state.shown = true;
     render();
     const shown = dialog.uxpShowModal
-      ? dialog.uxpShowModal({ title: "讀取中", resize: "none" })
+      ? dialog.uxpShowModal({ title, resize: "none" })
       : dialog.showModal();
     Promise.resolve(shown).catch(() => {});
   }, LOADING_DELAY_MS);
@@ -3117,6 +3247,112 @@ function showDialog(dialog, title, options = {}) {
     ? dialog.uxpShowModal({ title, resize: "none", ...options })
     : dialog.showModal();
   return Promise.resolve(show).then((result) => result === "confirm");
+}
+
+// ---------- 真實素材：上傳一份圖層名稱一樣的真圖 PSD，Resize 的預覽和產出都改用它 ----------
+//
+// 樣板只存百分比位置，跟用哪張圖無關；模組的母版（假圖）只負責編輯版面。
+// 真實素材沒有的編號圖層（例如 $KV2）會改用去掉編號的同名圖層（$KV）。
+
+// 「產出Resize圖」上方勾選的模組（記在這台電腦）
+const EXPORT_MODULES_KEY = "bannerResizer.exportModules";
+
+const realMaterial = { doc: null, fileName: "", names: [] };
+const realMaterialListeners = new Set();
+
+// 已上傳且還開著才算數（使用者關掉那份 PSD 就回到用假圖）
+function activeRealMaterial() {
+  return realMaterial.doc && isDocumentOpen(realMaterial.doc)
+    ? realMaterial.doc
+    : null;
+}
+
+function onRealMaterialChanged(listener) {
+  realMaterialListeners.add(listener);
+}
+
+function notifyRealMaterialChanged() {
+  renderRealMaterialLabel();
+  realMaterialListeners.forEach((listener) => listener());
+}
+
+function renderRealMaterialLabel() {
+  const active = Boolean(activeRealMaterial());
+  document.getElementById("real-material-label").textContent = active
+    ? `真實素材：${realMaterial.fileName}`
+    : "";
+  document.getElementById("btn-clear-real-material").style.display = active
+    ? ""
+    : "none";
+}
+
+// 樣板要顯示、但真實素材沒有（也沒有去掉編號的圖層可代替）的圖層 → 用到它的樣板數
+function missingRealLayers(names) {
+  const have = new Set(names);
+  const missing = {};
+  moduleStore.templates
+    .filter((template) => !template.builtin && template.values)
+    .forEach((template) => {
+      template.values.variants.forEach((variant) => {
+        Object.keys(variant.elements || {}).forEach((name) => {
+          const spec = variant.elements[name];
+          if (
+            !spec ||
+            spec.hidden ||
+            have.has(name) ||
+            have.has(name.replace(/\d+$/, ""))
+          ) {
+            return;
+          }
+          missing[name] = (missing[name] || 0) + 1;
+        });
+      });
+    });
+  return missing;
+}
+
+async function uploadRealMaterial() {
+  let file;
+  try {
+    file = await localFileSystem.getFileForOpening({ types: ["psd", "psb"] });
+  } catch (error) {
+    await app.showAlert(`無法選擇檔案：${error.message || error}`);
+    return;
+  }
+  if (!file) {
+    return;
+  }
+  try {
+    const doc = await openPsdAsMaster(file);
+    const names = dollarLayerNames(doc);
+    if (!names.length) {
+      throw new Error("這份 PSD 找不到 $ 開頭的圖層");
+    }
+    realMaterial.doc = doc;
+    realMaterial.fileName = doc.name;
+    realMaterial.names = names;
+    notifyRealMaterialChanged();
+    const missing = missingRealLayers(names);
+    const list = Object.keys(missing);
+    if (list.length) {
+      await app.showAlert(
+        `真實素材缺少這些圖層，用到的樣板產出時會少這一塊：\n${list
+          .map((name) => `${name}（${missing[name]} 個樣板）`)
+          .join("\n")}`,
+      );
+    } else {
+      await showToast("已套用真實素材");
+    }
+  } catch (error) {
+    await app.showAlert(error.message || String(error));
+  }
+}
+
+function clearRealMaterial() {
+  realMaterial.doc = null;
+  realMaterial.fileName = "";
+  realMaterial.names = [];
+  notifyRealMaterialChanged();
 }
 
 // ---------- 工作面板：Resize／套圖 兩個分頁各一份，各自保存選取狀態 ----------
@@ -3345,7 +3581,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     heightPercent: el("field-heightPercent"),
     rotation: el("field-rotation"),
   };
-  const stretchCheck = el("field-stretch");
+  const fitPicker = el("field-fit");
   const hiddenCheck = el("field-hidden");
   const stage = el("preview-stage");
   const templatePicker = el("template-picker");
@@ -3385,13 +3621,26 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   // ----- 圖層名稱：上傳的 PSD 裡所有 $ 開頭的圖層（沒有 PSD 時用模式的預設清單） -----
 
   function refreshExtraNames() {
+    let names = [];
     try {
-      state.extraNames = isDocumentOpen(state.master)
-        ? dollarLayerNames(state.master)
-        : [];
+      names = isDocumentOpen(state.master) ? dollarLayerNames(state.master) : [];
     } catch (_error) {
-      state.extraNames = [];
+      names = [];
     }
+    if (usingRealMaterial()) {
+      // 預覽的是真實素材：圖層清單＝真實素材的圖層，加上這個樣板有設定、
+      // 由去掉編號的圖層代替的（例如 $KV2 用 $KV 的圖）；母版裡其他的圖層不列
+      const variant = currentVariant();
+      const aliases = variant
+        ? Object.keys(variant.elements).filter(
+            (name) =>
+              !realMaterial.names.includes(name) &&
+              realMaterial.names.includes(sourceLayerName(name)),
+          )
+        : [];
+      names = withExtraNames(realMaterial.names.slice(), aliases);
+    }
+    state.extraNames = names;
   }
 
   // 要找的圖層：模式的清單 + PSD 裡其他 $ 圖層
@@ -3443,6 +3692,54 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     return template && template.values ? template : null;
   }
 
+  // 預覽與產出的圖層來源：Resize 有上傳真實素材就用它，否則用模組的母版（假圖）
+  function sourceDoc() {
+    return (!isApply && activeRealMaterial()) || state.master;
+  }
+
+  function usingRealMaterial() {
+    return !isApply && Boolean(activeRealMaterial());
+  }
+
+  // 來源 PSD 裡要找的圖層名稱：真實素材沒有的編號圖層（$KV2）改用去掉編號的（$KV）
+  function sourceLayerName(name) {
+    if (!usingRealMaterial() || realMaterial.names.includes(name)) {
+      return name;
+    }
+    const base = name.replace(/\d+$/, "");
+    return realMaterial.names.includes(base) ? base : name;
+  }
+
+  function sourceLayerNames() {
+    return usingRealMaterial() ? realMaterial.names : layerNames();
+  }
+
+  // 真實素材的預覽：樣板要的編號圖層（$KV2）沿用去掉編號那層（$KV）的圖，排在它上面
+  function withAliasImages(cache) {
+    const out = {
+      ...cache,
+      images: { ...cache.images },
+      order: cache.order.slice(),
+      aliases: new Set(cache.aliases || []), // 借別的圖層圖片的名稱
+    };
+    // 母版沒開時也要找得到樣板用到的編號圖層
+    const variant = currentVariant();
+    const wanted = new Set([
+      ...layerNames(),
+      ...(variant ? Object.keys(variant.elements) : []),
+    ]);
+    wanted.forEach((name) => {
+      const base = sourceLayerName(name);
+      if (out.images[name] || base === name || !out.images[base]) {
+        return;
+      }
+      out.images[name] = out.images[base];
+      out.order.splice(out.order.indexOf(base) + 1, 0, name);
+      out.aliases.add(name);
+    });
+    return out;
+  }
+
   // 預覽用的圖層圖片：套圖選了某一組時，勾選圖層改用那一組的圖（含寬高）
   function layerImage(name) {
     const cache = state.previewCache;
@@ -3485,7 +3782,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   function overrideImage(name) {
     const variant = verticalVariant();
     const override = textOverrideOf(variant, name, false);
-    if (!override || !isDocumentOpen(state.master)) {
+    // 用真實素材預覽時顯示真圖本身的文字
+    if (!override || !isDocumentOpen(state.master) || usingRealMaterial()) {
       return null;
     }
     const key = `${state.master.id}|${name}|${JSON.stringify(override)}`;
@@ -3519,14 +3817,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // 旋轉後的預覽圖：有就回傳；沒有就排程請 Photoshop 產生（拖曳中先不產生）
   function rotatedImage(name, rotation) {
-    if (!rotation || !isDocumentOpen(state.master)) {
+    if (!rotation || !isDocumentOpen(sourceDoc())) {
       return null;
     }
     if (isApply && applyExtras && applyExtras.replacementFor(name)) {
       return null; // 換上的套圖圖檔不在 PSD 裡，預覽不轉（產出時會轉）
     }
     const override = textOverrideOf(verticalVariant(), name, false);
-    const key = `${state.master.id}|${name}|${rotation}|${JSON.stringify(override || null)}`;
+    const key = `${sourceDoc().id}|${name}|${rotation}|${JSON.stringify(override || null)}`;
     const hit = state.rotatedImages[key];
     if (hit) {
       return hit.image || null;
@@ -3545,14 +3843,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         return;
       }
       state.rotatedImages[key] = { pending: true };
-      const master = state.master;
+      const master = sourceDoc();
       setStatus(`產生 ${name} 旋轉 ${rotation} 度的預覽中…`);
       whilePhotoshopBusy(() =>
         buildRotatedPreview(
           master,
-          name,
+          sourceLayerName(name),
           mode.required(),
-          layerNames(),
+          sourceLayerNames(),
           rotation,
           override,
         ),
@@ -3560,7 +3858,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         .then((image) => {
           state.rotatedImages[key] = { image: { ...image, rotation } };
           setStatus("");
-          if (state.master && state.master.id === master.id) {
+          if (sourceDoc() && sourceDoc().id === master.id) {
             applyElementStyle(name, specForPreview(name));
           }
         })
@@ -3573,26 +3871,28 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // 拉伸的群組裡有文字：色塊與文字分開的預覽圖（第一次需要時請 Photoshop 產生）
   function stretchPartsFor(name) {
-    if (!isDocumentOpen(state.master) || (isApply && applyExtras && applyExtras.replacementFor(name))) {
+    if (!isDocumentOpen(sourceDoc()) || (isApply && applyExtras && applyExtras.replacementFor(name))) {
       return null;
     }
-    const key = `${state.master.id}|${name}`;
+    const key = `${sourceDoc().id}|${name}`;
     const hit = state.stretchParts[key];
     if (hit) {
       return hit.parts || null;
     }
     state.stretchParts[key] = { pending: true };
-    const master = state.master;
+    const master = sourceDoc();
     // 重新擷取（例如改完文字）之後，之前還在跑的結果是舊的，不要寫回來
     const generation = state.stretchGeneration;
-    whilePhotoshopBusy(() => buildStretchParts(master, name, mode.required(), layerNames()))
+    whilePhotoshopBusy(() =>
+      buildStretchParts(master, sourceLayerName(name), mode.required(), sourceLayerNames()),
+    )
       .then((parts) => {
         if (generation !== state.stretchGeneration) {
           return;
         }
         state.stretchParts[key] = { parts };
         delete state.stretchFailures[key];
-        if (state.master && state.master.id === master.id) {
+        if (sourceDoc() && sourceDoc().id === master.id) {
           applyElementStyle(name, specForPreview(name));
         }
       })
@@ -3617,7 +3917,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         if (!state.stretchRetry) {
           state.stretchRetry = setTimeout(() => {
             state.stretchRetry = null;
-            if (state.master && state.master.id === master.id) {
+            if (sourceDoc() && sourceDoc().id === master.id) {
               applyElementStyle(name, specForPreview(name));
             }
           }, 1000);
@@ -3628,7 +3928,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // 預覽 PSD 裡這個 $ 圖層是不是含文字的群組（拉伸時要分開處理）
   function isGroupLayerName(name) {
-    const key = isDocumentOpen(state.master) ? `${state.master.id}|${name}` : "";
+    const key = isDocumentOpen(sourceDoc()) ? `${sourceDoc().id}|${name}` : "";
     const hit = key && state.stretchParts[key];
     // 失敗放棄（failed）時 parts 是 null，回傳 false，預覽就整張拉伸
     return Boolean(!hit || hit.pending || (hit.parts && hit.parts.text));
@@ -3721,6 +4021,11 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
         variant.elements[name] = measured[name]
           ? deepClone(measured[name])
           : defaultSpecFor(name);
+        if (!isApply) {
+          // 母版之後才多出來的圖層（例如上傳別的樣板時複製進來的 $Headline2）：
+          // 舊樣板當初沒有它，一律先隱藏，要用再到「顯示」取消勾選
+          variant.elements[name].hidden = true;
+        }
       }
     }
   }
@@ -3844,8 +4149,16 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     if (state.elementName !== "$BG" && hiddenCheck && hiddenCheck.checked) {
       out.hidden = true;
     }
-    if (out.heightPercent > 0 && stretchCheck && stretchCheck.checked) {
-      out.stretch = true;
+    if (out.heightPercent > 0) {
+      if (state.fitChoice) {
+        // 剛在下拉選了填滿方式
+        out.fit = state.fitChoice;
+      } else {
+        // 沒選過就沿用原本的設定（沒設定時依圖層名稱決定，見 fitModeOf）
+        if (FIT_MODES.includes(spec.fit)) {
+          out.fit = spec.fit;
+        }
+      }
     }
     // 背景要鋪滿，不旋轉
     const r = normalizeAngle(parseFloat(fields.rotation.value));
@@ -3876,9 +4189,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       hiddenCheck.checked = spec.hidden === true;
       hiddenCheck.disabled = state.elementName === "$BG";
     }
-    if (stretchCheck) {
-      stretchCheck.checked = spec.stretch === true;
-      stretchCheck.disabled = state.elementName === "$BG";
+    if (fitPicker) {
+      state.fitChoice = null;
+      const index = FIT_MODES.indexOf(fitModeOf(state.elementName, spec));
+      if (fitPicker._shownIndex !== index) {
+        fitPicker._shownIndex = index; // 拖拉時每次移動都會寫欄位，沒變就不重設下拉
+        setPickerIndex(fitPicker, index);
+      }
+      fitPicker.disabled = state.elementName === "$BG";
     }
     fields.rotation.disabled = state.elementName === "$BG";
   }
@@ -3956,6 +4274,7 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     delete target.heightPercent;
     delete target.rotation;
     delete target.stretch;
+    delete target.fit;
     delete target.hidden;
     delete target.alignX;
     delete target.alignY;
@@ -4000,10 +4319,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   // 畫下拉時記住每一項對應的模組（templateIndex，草稿／提示為 -1），
   // 選擇時直接查表，不必在選完之後重畫下拉，位置也不會差一格
   function renderTemplatePicker() {
-    const entries = templates().map((template, index) => ({
-      label: template.name || "（未命名模組）",
-      index,
-    }));
+    // Resize 不列內建「預設」模組（只是舊版新模組的複製來源）
+    const hideBuiltin = (template) => !isApply && template.builtin;
+    if (currentTemplate() && hideBuiltin(currentTemplate())) {
+      state.templateIndex = -1;
+    }
+    const entries = templates()
+      .map((template, index) => ({
+        label: template.name || "（未命名模組）",
+        index,
+        template,
+      }))
+      .filter((entry) => !hideBuiltin(entry.template));
+    renderExportList();
     if (state.draft) {
       entries.unshift({ label: state.draft.label, index: -1 });
     } else if (isNothingSelected()) {
@@ -4058,7 +4386,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   }
 
   function renderElementPicker() {
-    fillPicker(elementPicker, editableNames());
+    // 這個樣板隱藏的圖層在清單上標「（此樣板隱藏）」，一眼看得出來產出時不會出現
+    const variant = currentVariant();
+    fillPicker(
+      elementPicker,
+      editableNames().map((name) => {
+        const spec = variant && variant.elements[name];
+        return spec && spec.hidden ? `${name}（此樣板隱藏）` : name;
+      }),
+    );
     setPickerIndex(elementPicker, editableNames().indexOf(state.elementName));
   }
 
@@ -4143,7 +4479,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       labels = { top: make("top"), right: make("right") };
       state.sizeLabels[name] = labels;
     }
-    const rect = fitInFrame(name, spec, ratio);
+    // 裁切填滿時標框的大小（看得到的範圍），不是放大後的圖
+    const rect = isCovered(name, spec) ? frameRectOf(spec) : fitInFrame(name, spec, ratio);
     const canvas = canvasSize();
     const stageW = Math.max(stage.clientWidth, 1);
     const stageH = Math.max(stage.clientHeight, 1);
@@ -4176,8 +4513,18 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       textOverlayFor(img, false);
       return;
     }
-    const rect = fitInFrame(name, spec, heightRatio(name));
-    const parts = isStretched(name, spec) ? stretchPartsFor(name) : null;
+    let rect = fitInFrame(name, spec, heightRatio(name));
+    // 裁切填滿：圖片放進跟框一樣大、超出就藏起來的盒子裡（旋轉時不裁）
+    const clip = isCovered(name, spec) && !spec.rotation ? frameRectOf(spec) : null;
+    placeInClip(img, clip);
+    let parts = isStretched(name, spec) ? stretchPartsFor(name) : null;
+    let textOnly = false;
+    if (parts && parts.textOnly) {
+      // 只有文字的圖層：跟產出一樣改成等比放入，字不變形
+      rect = fitInFrame(name, { ...spec, fit: "contain" }, heightRatio(name));
+      parts = null;
+      textOnly = true;
+    }
     const overlay = textOverlayFor(img, Boolean(parts));
     if (parts) {
       // 色塊照框拉伸
@@ -4222,12 +4569,20 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       img._dataUrl = source.dataUrl;
       img.src = source.dataUrl;
     }
+    if (clip) {
+      // 位置、大小都相對於框（盒子）
+      img.style.left = `${((rect.left - clip.left) / clip.width) * 100}%`;
+      img.style.top = `${((rect.top - clip.top) / clip.height) * 100}%`;
+      img.style.width = `${(rect.width / clip.width) * 100}%`;
+      img.style.height = "auto";
+      return;
+    }
     if (!turned) {
       img.style.left = `${rect.left}%`;
       img.style.top = `${rect.top}%`;
       img.style.width = `${rect.width}%`;
       // 拉伸：高度也照框，不維持比例（含文字的群組在分開的圖還沒好之前先不拉伸，免得字變形）
-      const waiting = isStretched(name, spec) && isGroupLayerName(name);
+      const waiting = isStretched(name, spec) && (textOnly || isGroupLayerName(name));
       img.style.height = isStretched(name, spec) && !waiting ? `${rect.height}%` : "auto";
       return;
     }
@@ -4245,6 +4600,31 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     img.style.left = `${((cx - outerW / 2) / stageW) * 100}%`;
     img.style.top = `${((cy - outerH / 2) / stageH) * 100}%`;
     img.style.width = `${(outerW / stageW) * 100}%`;
+  }
+
+  // 把圖層圖片放進（或移出）裁切用的盒子；盒子取代圖片在預覽區裡的位置與層級
+  function placeInClip(img, clip) {
+    if (!clip) {
+      if (img._clip) {
+        stage.insertBefore(img, img._clip);
+        img._clip.parentNode.removeChild(img._clip);
+        img._clip = null;
+      }
+      return;
+    }
+    if (!img._clip) {
+      const box = document.createElement("div");
+      box.className = "preview-clip";
+      stage.insertBefore(box, img);
+      box.appendChild(img);
+      img._clip = box;
+    }
+    const box = img._clip;
+    box.style.zIndex = img.style.zIndex;
+    box.style.left = `${clip.left}%`;
+    box.style.top = `${clip.top}%`;
+    box.style.width = `${clip.width}%`;
+    box.style.height = `${clip.height}%`;
   }
 
   function frameHeightPercent(name, spec) {
@@ -4556,10 +4936,13 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     names.forEach((name) => {
       const img = state.images[name];
       img.style.zIndex = String(zIndexFor(name, 0));
+      // 裁切填滿的圖層在盒子裡：排盒子
+      const node = img._clip || img;
+      node.style.zIndex = img.style.zIndex;
       if (anchor) {
-        stage.insertBefore(img, anchor);
+        stage.insertBefore(node, anchor);
       } else {
-        stage.appendChild(img);
+        stage.appendChild(node);
       }
       if (img._overlay && img._overlay.style.display !== "none") {
         img._overlay.style.zIndex = img.style.zIndex;
@@ -4731,7 +5114,15 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return;
     }
 
+    const variant = currentVariant();
     cache.order.forEach((name, index) => {
+      // 借圖的編號圖層（$KV2 用 $KV 的圖）只畫在有設定它、而且沒隱藏的樣板
+      if (cache.aliases && cache.aliases.has(name)) {
+        const spec = variant && variant.elements[name];
+        if (!spec || spec.hidden) {
+          return;
+        }
+      }
       const img = document.createElement("img");
       img.className = "preview-layer";
       img.setAttribute("data-layer", name);
@@ -5270,7 +5661,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       state.stretchFailures = {};
       state.stretchGeneration += 1;
     }
-    const master = state.master;
+    // 有真實素材就預覽真圖，否則預覽模組的母版
+    const master = sourceDoc();
     if (!isDocumentOpen(master)) {
       state.previewCache = null;
       renderPreview();
@@ -5288,17 +5680,19 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
     setStatus("擷取圖層中，請稍候…");
     try {
+      const real = usingRealMaterial();
       const cache = await getPreviewCache(
         master,
         force,
-        mode.required(),
-        layerNames(),
+        real ? [] : mode.required(),
+        sourceLayerNames(),
       );
       // UXP 每次取得的文件物件不一定是同一個，用 id 判斷是否已切換母版
-      if (!state.master || state.master.id !== master.id) {
-        return; // 擷取期間已切換母版
+      if (!sourceDoc() || sourceDoc().id !== master.id) {
+        return; // 擷取期間已切換母版或真實素材
       }
-      state.previewCache = cache;
+      state.previewCache = real ? withAliasImages(cache) : cache;
+      renderElementPicker(); // 圖層清單跟著預覽來源更新
       renderPreview();
       setStatus(`預覽來源：${master.name}`);
     } catch (error) {
@@ -5316,7 +5710,8 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     }
     commitFields();
     state.elementName = name;
-    setPickerIndex(elementPicker, editableNames().indexOf(name));
+    // 清單可能已經變了（例如換成真實素材），整個重畫，名稱才不會對錯行
+    renderElementPicker();
     loadFields();
     updateHighlight();
   }
@@ -5919,6 +6314,12 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     refreshExtraNames();
     state.elementName = name;
     renderAll();
+    // 新的文字只在目前的樣板顯示（其他樣板補上的設定是隱藏的）
+    const variant = currentVariant();
+    if (variant && variant.elements[name]) {
+      delete variant.elements[name].hidden;
+      loadFields();
+    }
     await refreshPreview(true);
     const message = `已新增 ${name}（雙擊預覽上的文字可修改）`;
     if (currentTemplate() && !isDraftSelected()) {
@@ -6465,16 +6866,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
 
   // ----- 上傳 PSD 新增 Resize 樣板：檔名（去掉 .psd）＝樣板名稱，位置、大小、畫布照那份 PSD -----
 
-  // 預覽和產出用的是母版的圖層，比例跟樣板 PSD 不一定一樣：上傳的樣板每個圖層都預設勾「填滿」，
-  // 剛好撐滿樣板 PSD 裡的框（文字仍等比，不會變形）
-  function autoStretchToTemplate(elements) {
-    Object.keys(elements).forEach((name) => {
-      const spec = elements[name];
-      if (name !== "$BG" && !spec.hidden && spec.heightPercent > 0) {
-        spec.stretch = true;
-      }
-    });
-  }
 
   async function uploadVariants() {
     const template = currentTemplate();
@@ -6552,7 +6943,6 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
           template.values.height = layout.height;
         }
         const elements = layout.elements;
-        autoStretchToTemplate(elements);
         if (layout.renamed.length) {
           warnings.push(`${name}：同名圖層自動編號 ${layout.renamed.join("、")}`);
         }
@@ -6713,14 +7103,34 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
     hiddenCheck.addEventListener("change", () => {
       updatePreviewFromFields();
       commitFields();
+      renderElementPicker(); // 更新清單上的「（此樣板隱藏）」
+      if (!state.images[state.elementName]) {
+        renderPreview(); // 原本隱藏、沒有畫出來的借圖圖層，取消隱藏後要補畫
+      }
     });
   }
-  if (stretchCheck) {
-    stretchCheck.addEventListener("change", () => {
-      // 拉伸要有框高：沒設高度%就先用圖層目前的高度
-      if (stretchCheck.checked && !(parseFloat(fields.heightPercent.value) > 0)) {
+  if (fitPicker) {
+    fitPicker.addEventListener("change", (event) => {
+      const choice = FIT_MODES[readPickerIndex(event)] || "contain";
+      // 裁切、拉伸要有框高：沒設高度就先用圖層目前的高度
+      if (choice !== "contain" && !(parseFloat(fields.heightPercent.value) > 0)) {
         writePxField("heightPercent", naturalHeightPercent(state.elementName, readFieldsAsSpec()));
       }
+      const ratio = heightRatio(state.elementName);
+      if (choice === "contain" && ratio && state.elementName !== "$BG") {
+        // 等比放入：框直接縮成圖片實際的大小（貼齊圖片邊緣，不留白）
+        const rect = fitInFrame(
+          state.elementName,
+          { ...readFieldsAsSpec(), fit: "contain" },
+          ratio,
+        );
+        fields.leftPercent.value = roundTo(rect.left, 2);
+        fields.topPercent.value = roundTo(rect.top, 2);
+        writePxField("widthPercent", rect.width);
+        writePxField("heightPercent", rect.height);
+      }
+      state.fitChoice = choice;
+      fitPicker._shownIndex = FIT_MODES.indexOf(choice);
       updatePreviewFromFields();
       commitFields();
     });
@@ -6745,6 +7155,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       return; // 選到的是「請按上傳」提示
     }
     state.variantIndex = readPickerIndex(event);
+    if (usingRealMaterial()) {
+      // 每個樣板用 $KV 代替的編號圖層不一樣，圖層清單和代替用的圖重算
+      if (state.previewCache) {
+        state.previewCache = withAliasImages(state.previewCache);
+      }
+      refreshExtraNames();
+    }
+    renderElementPicker(); // 每個樣板隱藏的圖層不一樣
     updateVariantNameValidity();
     loadFields();
     renderPreview();
@@ -6979,25 +7397,222 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
       await applyExtras.generate(template);
       return;
     }
-    // 沒勾「產出全部」就只產出目前選的樣板
-    const all = el("generate-all-check") && el("generate-all-check").checked;
-    const only = all ? null : currentVariant();
-    if (!all && !only) {
-      await app.showAlert("請先選擇要產出的 Resize 樣板，或勾選「產出全部」。");
+    // 產出後留在原本的面板，方便接著調整、再產出
+    const checked = exportTemplates();
+    if (checked.length) {
+      await generateCheckedTemplates(checked);
       return;
     }
+    // 沒勾任何模組：只產出目前選的樣板
+    const only = currentVariant();
+    if (!only) {
+      await app.showAlert("請先選擇要產出的 Resize 樣板，或勾選要產出的模組。");
+      return;
+    }
+    const source = activeRealMaterial() || state.master;
     try {
-      const done = await whilePhotoshopBusy(() =>
-        generateResizeDocuments(state.master, template.values, only),
+      const result = await whilePhotoshopBusy(() =>
+        generateResizeDocuments(source, template.values, only, {
+          formats: exportFormats(),
+        }),
       );
-      // 產出後留在原本的面板，方便接著調整、再產出
-      if (done) {
+      if (result && result.errors.length) {
+        await app.showAlert(`Resize 產製失敗：\n${result.errors.join("\n")}`);
+      } else if (result) {
         await showToast("產出完成");
       }
     } catch (error) {
       await app.showAlert(`Resize 產製失敗：${error.message || error}`);
     }
   });
+
+  // ----- 產出：勾選的模組（勾一個＝產出它全部的樣板） -----
+
+  function readExportNames() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(EXPORT_MODULES_KEY));
+      return new Set(Array.isArray(saved) ? saved : []);
+    } catch (_error) {
+      return new Set();
+    }
+  }
+
+  function writeExportNames(names) {
+    try {
+      localStorage.setItem(EXPORT_MODULES_KEY, JSON.stringify([...names]));
+    } catch (_error) {
+      // 存不了就只在這次使用
+    }
+  }
+
+  // 可以產出的模組（不含內建「預設」）
+  function exportableTemplates() {
+    return templates().filter((template) => !template.builtin && template.values);
+  }
+
+  function exportTemplates() {
+    const names = readExportNames();
+    return exportableTemplates().filter((template) => names.has(template.name));
+  }
+
+  function exportFormats() {
+    return {
+      jpg: Boolean(el("export-jpg-check") && el("export-jpg-check").checked),
+      png: Boolean(el("export-png-check") && el("export-png-check").checked),
+    };
+  }
+
+  function namedVariantCount(list) {
+    return list.reduce(
+      (sum, template) =>
+        sum + template.values.variants.filter((variant) => variant.outputDocument).length,
+      0,
+    );
+  }
+
+  function renderExportList() {
+    const list = el("export-modules-list");
+    if (!list) {
+      return;
+    }
+    const names = readExportNames();
+    const all = exportableTemplates();
+    list.innerHTML = "";
+    all.forEach((template) => {
+      const label = document.createElement("label");
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = names.has(template.name);
+      check.addEventListener("change", () => {
+        const next = readExportNames();
+        if (check.checked) {
+          next.add(template.name);
+        } else {
+          next.delete(template.name);
+        }
+        writeExportNames(next);
+        renderExportList();
+      });
+      label.appendChild(check);
+      const count = template.values.variants.filter((variant) => variant.outputDocument).length;
+      label.appendChild(document.createTextNode(`${template.name}（${count}）`));
+      list.appendChild(label);
+    });
+    const checked = exportTemplates();
+    el("export-all-check").checked = all.length > 0 && checked.length === all.length;
+    el("export-count").textContent = checked.length
+      ? `已勾 ${checked.length} 個模組，共 ${namedVariantCount(checked)} 張`
+      : "沒勾：只產出目前的樣板";
+  }
+
+  // 每個模組的圖層來源：有真實素材就用它，否則開啟那個模組的母版
+  async function sourceForTemplate(template) {
+    const real = activeRealMaterial();
+    if (real) {
+      return real;
+    }
+    if (template === currentTemplate() && isDocumentOpen(state.master)) {
+      return state.master;
+    }
+    const opened = findOpenDocumentForTemplate(template);
+    if (opened) {
+      return opened;
+    }
+    const file = template.source ? await resolveSrcFolder(template.source.path) : null;
+    if (!file) {
+      throw new Error("找不到母版 PSD，請先上傳真實素材，或開啟這個模組的母版");
+    }
+    return openPsdAsMaster(file);
+  }
+
+  // 面板上的產出進度（不開視窗）；產出期間「產出Resize圖」按鈕停用，避免重複按
+  function startExportProgress(text) {
+    const box = el("export-progress");
+    const button = el("btn-start-generate");
+    const show = (percent, message) => {
+      el("export-progress-text").textContent = message;
+      el("export-progress-bar").style.width = `${clampNumber(percent, 0, 100)}%`;
+    };
+    box.style.display = "block";
+    button.setAttribute("disabled", "");
+    show(0, text);
+    return {
+      update: show,
+      async done() {
+        box.style.display = "none";
+        button.removeAttribute("disabled");
+      },
+    };
+  }
+
+  // 資料夾名稱不能有的字元換成底線
+  function safeFolderName(name) {
+    return String(name).replace(/[\\/:*?"<>|]/g, "_").trim() || "未命名模組";
+  }
+
+  async function subFolder(folder, name) {
+    try {
+      return await folder.createFolder(name);
+    } catch (_error) {
+      return folder.getEntry(name); // 已經有同名資料夾
+    }
+  }
+
+  // 一次產出多個模組：每個模組一個資料夾，產完的文件直接關閉；單一個失敗就跳過，最後列出
+  async function generateCheckedTemplates(list) {
+    const folder = await localFileSystem.getFolder();
+    if (!folder) {
+      return;
+    }
+    const total = namedVariantCount(list);
+    const formats = exportFormats();
+    const errors = [];
+    let finished = 0;
+    // 不能用強制回應的讀取視窗：它開著時 Photoshop 不能建立／存檔文件，會一直卡住
+    const loading = startExportProgress(`產出中 0 / ${total}`);
+    try {
+      for (const template of list) {
+        try {
+          const source = await sourceForTemplate(template);
+          const target = await subFolder(folder, safeFolderName(template.name));
+          const result = await whilePhotoshopBusy(() =>
+            generateResizeDocuments(source, template.values, null, {
+              folder: target,
+              formats,
+              close: true,
+              progress: (docName) => {
+                finished += 1;
+                loading.update((finished / total) * 100, `產出中 ${finished} / ${total}：${docName}`);
+              },
+            }),
+          );
+          if (result) {
+            errors.push(...result.errors.map((line) => `${template.name}／${line}`));
+          }
+        } catch (error) {
+          errors.push(`${template.name}：${error.message || error}`);
+        }
+      }
+    } finally {
+      await loading.done();
+    }
+    if (errors.length) {
+      await app.showAlert(`產出完成，但有 ${errors.length} 個失敗：\n${errors.join("\n")}`);
+    } else {
+      await showToast(`已產出 ${total} 張`);
+    }
+  }
+
+  if (el("export-all-check")) {
+    el("export-all-check").addEventListener("change", () => {
+      writeExportNames(
+        el("export-all-check").checked
+          ? new Set(exportableTemplates().map((template) => template.name))
+          : new Set(),
+      );
+      renderExportList();
+    });
+  }
 
   el("btn-cancel-settings").addEventListener("click", () => {
     closeResizeSettingsPanel();
@@ -7006,6 +7621,14 @@ function createResizeWorkspace(root, mode = RESIZE_MODE) {
   window.addEventListener("resize", () => {
     if (state.previewCache) {
       layoutPreview();
+    }
+  });
+
+  // 上傳／取消真實素材：Resize 的預覽改用真圖（或改回母版）
+  onRealMaterialChanged(() => {
+    if (!isApply) {
+      state.previewCache = null;
+      refreshPreview(false);
     }
   });
 
@@ -8629,6 +9252,7 @@ async function buildStretchParts(staleMaster, layerName, required, names) {
   const bgFile = await tempFolder.createFile(`preview-stretch-bg-${stamp}.png`, { overwrite: true });
   const textFile = await tempFolder.createFile(`preview-stretch-text-${stamp}.png`, { overwrite: true });
   let result = null;
+  let textOnly = false; // 只有文字、沒有底色（拉伸沒意義，預覽改等比放入）
   await runModal(async () => {
     await closeLeftoverPreviewDocuments();
     const container = getMcdSourceContainer(master, required, names);
@@ -8637,6 +9261,10 @@ async function buildStretchParts(staleMaster, layerName, required, names) {
       throw new Error(`找不到圖層 ${layerName}`);
     }
     // 智慧型物件看不到裡面的文字：在暫存文件裡轉成圖層後再量、再分開
+    if (isTextLayer(layer)) {
+      textOnly = true; // 只有文字：預覽改成等比放入
+      return;
+    }
     const smart = isSmartObject(layer);
     const texts = smart ? [] : canSearchChildren(layer) ? collectTextLayers(layer) : [];
     if (!smart && !texts.length) {
@@ -8653,6 +9281,10 @@ async function buildStretchParts(staleMaster, layerName, required, names) {
           throw new Error(`${layerName} 無法轉換成圖層`);
         }
         if (!group) {
+          if (isTextLayer(copy)) {
+            textOnly = true; // 智慧型物件裡只有一個文字圖層
+            return { replacedLayer: copy };
+          }
           const inner = canSearchChildren(copy) ? collectTextLayers(copy) : [];
           if (!inner.length) {
             noText = true; // 裡面沒有文字（例如純圖片）：整張拉伸就好
@@ -8687,7 +9319,7 @@ async function buildStretchParts(staleMaster, layerName, required, names) {
     };
     try {
       const bg = await exportLayerPreviewPng(master, layer, bgFile, layerName, removeFrom(false));
-      if (noText) {
+      if (noText || textOnly) {
         return;
       }
       const text = await exportLayerPreviewPng(master, layer, textFile, layerName, removeFrom(true));
@@ -8710,6 +9342,9 @@ async function buildStretchParts(staleMaster, layerName, required, names) {
       }
     }
   }, "擷取拉伸預覽");
+  if (textOnly) {
+    return { textOnly: true };
+  }
   if (!result) {
     return null;
   }
@@ -9865,6 +10500,13 @@ document
     await changeModuleFolder();
     updateModuleFolderLabel();
   });
+
+document
+  .getElementById("btn-upload-real-material")
+  .addEventListener("click", uploadRealMaterial);
+document
+  .getElementById("btn-clear-real-material")
+  .addEventListener("click", clearRealMaterial);
 
 const btnOpenCsv = document.getElementById("btn-open-csv");
 const btnGenBanner1 = document.getElementById("btn-gen-banner1");
